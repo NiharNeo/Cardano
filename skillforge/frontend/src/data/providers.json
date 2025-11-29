@@ -1,0 +1,59 @@
+[
+  {
+    "id": "p1",
+    "name": "AdaLabs Collective",
+    "skills": ["cardano", "plutus", "smart contract", "nft"],
+    "hourlyRateAda": 80,
+    "rating": 4.9,
+    "completedGigs": 128,
+    "availability": ["today", "this week"],
+    "timezones": ["UTC", "CET"],
+    "bio": "Core Cardano devs offering rapid smart-contract pairing sessions."
+  },
+  {
+    "id": "p2",
+    "name": "DeFi Sherpa",
+    "skills": ["defi", "smart contract", "haskell"],
+    "hourlyRateAda": 60,
+    "rating": 4.7,
+    "completedGigs": 96,
+    "availability": ["evenings", "weekends"],
+    "timezones": ["UTC-5", "UTC-3"],
+    "bio": "Hands-on guidance for launching DeFi primitives on Cardano."
+  },
+  {
+    "id": "p3",
+    "name": "React Dapp Studio",
+    "skills": ["react", "typescript", "wallet", "dapp", "ux"],
+    "hourlyRateAda": 45,
+    "rating": 4.6,
+    "completedGigs": 204,
+    "availability": ["today", "this week"],
+    "timezones": ["UTC", "UTC+5:30"],
+    "bio": "Frontend-first team helping you ship beautiful Cardano dapps."
+  },
+  {
+    "id": "p4",
+    "name": "RustonChain",
+    "skills": ["rust", "wallet", "nft"],
+    "hourlyRateAda": 70,
+    "rating": 4.8,
+    "completedGigs": 72,
+    "availability": ["this week"],
+    "timezones": ["UTC+1", "UTC+8"],
+    "bio": "Performance-focused engineering for Cardano tooling and wallets."
+  },
+  {
+    "id": "p5",
+    "name": "Design Guild",
+    "skills": ["design", "ui", "ux", "nft"],
+    "hourlyRateAda": 35,
+    "rating": 4.5,
+    "completedGigs": 310,
+    "availability": ["today", "weekends"],
+    "timezones": ["UTC", "UTC+2"],
+    "bio": "Fast-turnaround UX audits and NFT collection branding."
+  }
+]
+
+
