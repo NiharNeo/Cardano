@@ -1,0 +1,11 @@
+# Aiken build output
+build/
+*.plutus
+
+# Aiken cache
+.aiken/
+
+# OS files
+.DS_Store
+Thumbs.db
+

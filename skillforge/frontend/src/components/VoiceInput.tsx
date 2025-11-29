@@ -14,9 +14,11 @@ const hasBrowserSpeech = (): boolean => {
     (('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window));
 };
 
+type VoiceState = 'idle' | 'listening' | 'processing' | 'stopped';
+
 export const VoiceInput: React.FC<VoiceInputProps> = ({ onSubmit }) => {
   const [text, setText] = useState('');
-  const [isListening, setIsListening] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionType | null>(null);
 
@@ -33,13 +35,25 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({ onSubmit }) => {
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
-    recognition.onstart = () => setIsListening(true);
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
+    recognition.onstart = () => setVoiceState('listening');
+    recognition.onend = () => {
+      if (voiceState === 'listening') {
+        setVoiceState('stopped');
+        setTimeout(() => setVoiceState('idle'), 1000);
+      }
+    };
+    recognition.onerror = () => {
+      setVoiceState('stopped');
+      setTimeout(() => setVoiceState('idle'), 1000);
+    };
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const transcript = event.results[0][0].transcript;
+      setVoiceState('processing');
       setText(transcript);
-      onSubmit(transcript);
+      setTimeout(() => {
+        onSubmit(transcript);
+        setVoiceState('idle');
+      }, 500);
     };
 
     recognitionRef.current = recognition;
@@ -48,22 +62,27 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({ onSubmit }) => {
       recognition.stop();
       recognitionRef.current = null;
     };
-  }, [onSubmit]);
+  }, [onSubmit, voiceState]);
 
   const handleToggleListening = useCallback(() => {
     if (!recognitionRef.current) return;
-    if (isListening) {
+    if (voiceState === 'listening' || voiceState === 'processing') {
       recognitionRef.current.stop();
+      setVoiceState('stopped');
+      setTimeout(() => setVoiceState('idle'), 1000);
     } else {
       recognitionRef.current.start();
     }
-  }, [isListening]);
+  }, [voiceState]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = text.trim();
-      if (!trimmed) return;
+      if (!trimmed) {
+        // Show error for empty input
+        return;
+      }
       onSubmit(trimmed);
     },
     [onSubmit, text]
@@ -91,12 +110,21 @@ export const VoiceInput: React.FC<VoiceInputProps> = ({ onSubmit }) => {
               type="button"
               className="btn btn-ghost"
               onClick={handleToggleListening}
-              disabled={!isSupported}
+              disabled={!isSupported || voiceState === 'processing'}
             >
-              {isListening && <span className="voice-indicator" />}
-              {isSupported ? (isListening ? 'Listening…' : 'Speak intent') : 'Voice unavailable'}
+              {voiceState === 'listening' && <span className="voice-indicator" />}
+              {voiceState === 'processing' && <span className="loading-spinner-small" />}
+              {isSupported
+                ? voiceState === 'listening'
+                  ? 'Listening…'
+                  : voiceState === 'processing'
+                  ? 'Processing…'
+                  : voiceState === 'stopped'
+                  ? 'Stopped'
+                  : 'Speak intent'
+                : 'Voice unavailable'}
             </button>
-            <button type="submit" className="btn btn-primary">
+            <button type="submit" className="btn btn-primary" disabled={!text.trim()}>
               Match providers
             </button>
           </div>

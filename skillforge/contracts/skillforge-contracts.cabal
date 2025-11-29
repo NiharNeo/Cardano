@@ -1,0 +1,47 @@
+cabal-version: 3.0
+name: skillforge-contracts
+version: 1.0.0
+license: Apache-2.0
+build-type: Simple
+
+library
+  exposed-modules:
+    Escrow
+    NFTPolicy
+    Compile
+  build-depends:
+    base >= 4.14 && < 5
+    , plutus-ledger-api >= 2.0.0
+    , plutus-contract >= 2.0.0
+    , plutus-tx >= 2.0.0
+    , cardano-api >= 1.35.0
+    , aeson >= 2.0.0
+    , bytestring >= 0.11.0
+    , text >= 2.0.0
+
+executable compile-contracts
+  main-is: Compile.hs
+  build-depends:
+    base >= 4.14 && < 5
+    , skillforge-contracts
+    , plutus-ledger-api >= 2.0.0
+    , plutus-contract >= 2.0.0
+    , plutus-tx >= 2.0.0
+    , cardano-api >= 1.35.0
+    , aeson >= 2.0.0
+    , bytestring >= 0.11.0
+    , text >= 2.0.0
+
+executable export-contracts
+  main-is: Export.hs
+  build-depends:
+    base >= 4.14 && < 5
+    , skillforge-contracts
+    , plutus-ledger-api >= 2.0.0
+    , plutus-contract >= 2.0.0
+    , plutus-tx >= 2.0.0
+    , cardano-api >= 1.35.0
+    , aeson >= 2.0.0
+    , bytestring >= 0.11.0
+    , text >= 2.0.0
+

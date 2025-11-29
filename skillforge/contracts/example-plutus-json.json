@@ -1,0 +1,52 @@
+{
+  "escrow": {
+    "type": "PlutusScriptV2",
+    "description": "SkillForge Escrow Contract - Manages escrow payments between learners and providers",
+    "parameters": {
+      "learnerPubKeyHash": "pubkeyhash_here",
+      "providerPubKeyHash": "pubkeyhash_here",
+      "price": 80000000,
+      "sessionId": "session_123"
+    },
+    "datum": {
+      "learnerAttestation": false,
+      "providerAttestation": false,
+      "lockedAt": 1704067200000
+    },
+    "redeemers": {
+      "AttestLearner": {
+        "constructor": 0,
+        "fields": []
+      },
+      "AttestProvider": {
+        "constructor": 1,
+        "fields": []
+      },
+      "Complete": {
+        "constructor": 2,
+        "fields": []
+      },
+      "Refund": {
+        "constructor": 3,
+        "fields": []
+      }
+    }
+  },
+  "nftPolicy": {
+    "type": "PlutusScriptV2",
+    "description": "SkillForge NFT Minting Policy - Mints session attestation NFTs",
+    "parameters": {
+      "escrowValidatorHash": "validatorhash_here",
+      "sessionId": "session_123",
+      "metadataHash": "QmExampleIPFSCID"
+    },
+    "redeemer": {
+      "Mint": {
+        "constructor": 0,
+        "fields": []
+      }
+    },
+    "tokenName": "SkillForge-Session-session_123"
+  }
+}
+

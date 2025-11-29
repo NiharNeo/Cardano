@@ -1,43 +1,144 @@
-import React from 'react';
-import { v4 as uuidv4 } from 'uuid';
+import React, { useState } from 'react';
+import { useWallet } from '../contexts/WalletContext';
+import { createSession, initEscrow } from '../services/api';
+import type { ParsedIntent } from '../utils/intentParser';
 import type { ScoredProvider } from './ProviderList';
 
 interface EscrowModalProps {
   provider: ScoredProvider | null;
   isOpen: boolean;
   onClose: () => void;
-  onEscrowLocked: (txId: string) => void;
+  onEscrowLocked: (txId: string, escrowId: string, sessionId: string) => void;
+  intent: ParsedIntent | null;
 }
 
 export const EscrowModal: React.FC<EscrowModalProps> = ({
   provider,
   isOpen,
   onClose,
-  onEscrowLocked
+  onEscrowLocked,
+  intent
 }) => {
-  const [isLocking, setIsLocking] = React.useState(false);
+  const wallet = useWallet();
+  const [isLocking, setIsLocking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!isOpen || !provider) return null;
 
-  const handleLockEscrow = () => {
+  const handleLockEscrow = async () => {
+    console.log('[EscrowModal] handleLockEscrow called', {
+      isConnected: wallet.isConnected,
+      hasAddress: !!wallet.address,
+      hasIntent: !!intent,
+      intentSkill: intent?.skill,
+      fullIntent: intent
+    });
+
+    // Check wallet connection
+    if (!wallet.isConnected || !wallet.address) {
+      setError('Please connect your wallet to proceed');
+      return;
+    }
+
+    // Check intent - allow if intent exists (skill can be null, we'll use a default)
+    if (!intent) {
+      setError('Please enter a skill request and match providers first');
+      return;
+    }
+
+    // Use intent.skill or a default
+    const skillToUse = intent.skill || 'General Mentoring';
+    console.log('[EscrowModal] Using skill:', skillToUse);
+
     setIsLocking(true);
-    // Simulate a short delay to feel like a blockchain call
-    setTimeout(() => {
-      const fakeTxId = uuidv4();
-      onEscrowLocked(fakeTxId);
+    setError(null);
+
+    try {
+      // Calculate escrow amount
+      const durationHours = intent.durationMinutes ? intent.durationMinutes / 60 : 1;
+      const amountAda = provider.hourlyRateAda * durationHours;
+
+      // Step 1: Create session in backend
+      console.log('[EscrowModal] Creating session with skill:', skillToUse);
+      
+      const sessionResponse = await createSession({
+        learnerAddress: wallet.address,
+        providerId: provider.id,
+        skill: skillToUse,
+        budget: intent.priceMax || undefined,
+        duration: intent.durationMinutes || undefined,
+        urgency: intent.urgency || undefined,
+        stakeKey: wallet.stakeKey || undefined
+      });
+
+      // Step 2: Initialize escrow
+      // Note: In production, providerAddress would come from provider's wallet
+      // For now, we'll use a placeholder
+      const providerAddress = wallet.address; // Placeholder - should be provider's address
+
+      const escrowResponse = await initEscrow({
+        learnerAddress: wallet.address,
+        providerAddress,
+        price: amountAda,
+        sessionId: sessionResponse.sessionId,
+        stakeKey: wallet.stakeKey || undefined
+      });
+
+      // Step 3: Sign the transaction
+      const signedTx = await wallet.signTx(escrowResponse.txBody);
+
+      // Step 4: Submit the transaction
+      const txId = await wallet.submitTx(signedTx);
+
+      // Step 5: Update escrow state in backend with transaction ID
+      try {
+        await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000'}/escrow/update`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            sessionId: sessionResponse.sessionId,
+            txId,
+            utxo: `${txId}#0` // Placeholder UTXO format
+          })
+        });
+      } catch (err) {
+        console.error('Error updating escrow state:', err);
+        // Continue even if update fails
+      }
+
+      // Step 6: Notify parent component
+      onEscrowLocked(txId, escrowResponse.escrowId, sessionResponse.sessionId);
+    } catch (err: any) {
+      console.error('Error locking escrow:', err);
+      setError(err.message || 'Failed to lock escrow. Please try again.');
+    } finally {
       setIsLocking(false);
-    }, 700);
+    }
   };
+
+  // Ensure intent exists and has required fields
+  const ready = wallet.isConnected && wallet.address && intent;
+  const durationHours = intent?.durationMinutes ? intent.durationMinutes / 60 : 1;
+  const totalAmount = provider.hourlyRateAda * durationHours;
+  
+  console.log('[EscrowModal] Render state:', {
+    ready,
+    isConnected: wallet.isConnected,
+    hasAddress: !!wallet.address,
+    hasIntent: !!intent,
+    intentSkill: intent?.skill
+  });
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <div className="modal-panel">
         <div className="modal-header">
           <div className="stack-tight">
-            <span className="modal-title">Simulate Cardano escrow lock</span>
+            <span className="modal-title">Initiate Cardano Escrow</span>
             <span className="small-muted">
-              This is an in-browser demo. No real ADA moves, but the flow mirrors an on-chain
-              experience.
+              Lock funds in an escrow contract for your session with {provider.name}.
             </span>
           </div>
           <button className="btn btn-ghost" type="button" onClick={onClose}>
@@ -45,6 +146,13 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
           </button>
         </div>
         <div className="modal-body">
+          {error && (
+            <div className="error-message animate-fade-in">
+              <span className="error-icon">⚠</span>
+              <span className="error-text">{error}</span>
+            </div>
+          )}
+
           <div className="status-strip">
             <span className="status-dot" />
             <span>
@@ -52,35 +160,62 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
               <strong>{provider.hourlyRateAda} ₳/hour</strong>.
             </span>
           </div>
+
           <div className="stack">
             <div className="stack-tight">
-              <span className="field-label">What this step would do on mainnet</span>
+              <span className="field-label">Session Details</span>
+              <div className="escrow-details">
+                <div className="escrow-detail-row">
+                  <span className="text-xs text-subtle">Duration:</span>
+                  <span className="text-xs">{durationHours.toFixed(1)} hours</span>
+                </div>
+                <div className="escrow-detail-row">
+                  <span className="text-xs text-subtle">Rate:</span>
+                  <span className="text-xs">{provider.hourlyRateAda} ₳/hour</span>
+                </div>
+                <div className="escrow-detail-row">
+                  <span className="text-xs text-subtle">Total Amount:</span>
+                  <span className="text-xs text-accent font-weight-bold">{totalAmount.toFixed(2)} ₳</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="stack-tight">
+              <span className="field-label">What happens next</span>
               <ul className="text-xs text-subtle" style={{ paddingLeft: 16, margin: 0 }}>
-                <li>Construct a transaction with a time-locked policy.</li>
-                <li>Lock user funds in a script-controlled UTXO.</li>
-                <li>Prepare NFT mint metadata to attest the session.</li>
+                <li>Create session in database</li>
+                <li>Backend builds escrow transaction with Plutus script</li>
+                <li>Funds are locked in a script-controlled UTXO</li>
+                <li>Transaction is signed and submitted to Cardano network</li>
+                <li>Escrow status is monitored via UTXO watcher (polls every 5s)</li>
               </ul>
             </div>
-            <div className="stack-tight">
-              <span className="field-label">In this demo</span>
-              <span className="small-muted">
-                We generate a fake transaction hash using <code>uuid</code> and show a locked
-                escrow state you can complete later.
-              </span>
-            </div>
+
+            {!ready && (
+              <div className="error-message">
+                <span className="error-icon">⚠</span>
+                <span className="error-text">
+                  {!wallet.isConnected || !wallet.address
+                    ? 'Please connect your wallet to proceed'
+                    : !intent
+                    ? 'Please enter a skill request and match providers first'
+                    : 'Please ensure intent is parsed'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
         <div className="modal-footer">
-          <button className="btn btn-ghost" type="button" onClick={onClose}>
+          <button className="btn btn-ghost" type="button" onClick={onClose} disabled={isLocking}>
             Cancel
           </button>
           <button
             className="btn btn-primary"
             type="button"
-            disabled={isLocking}
+            disabled={isLocking || !ready}
             onClick={handleLockEscrow}
           >
-            {isLocking ? 'Locking escrow…' : 'Lock escrow & generate fake TX'}
+            {isLocking ? 'Locking escrow…' : `Lock ${totalAmount.toFixed(2)} ₳ in escrow`}
           </button>
         </div>
       </div>
@@ -89,5 +224,3 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
 };
 
 export default EscrowModal;
-
-

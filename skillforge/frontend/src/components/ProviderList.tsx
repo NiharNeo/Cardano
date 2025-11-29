@@ -1,4 +1,5 @@
 import React from 'react';
+import ProviderCard from './ProviderCard';
 
 export interface Provider {
   id: string;
@@ -6,10 +7,10 @@ export interface Provider {
   skills: string[];
   hourlyRateAda: number;
   rating: number;
-  completedGigs: number;
+  completedGigs?: number;
   availability: string[];
   timezones: string[];
-  bio: string;
+  bio?: string;
 }
 
 export interface ScoredProvider extends Provider {
@@ -21,14 +22,19 @@ interface ProviderListProps {
   providers: ScoredProvider[];
   onSelect: (provider: ScoredProvider) => void;
   parsedSummary: string;
+  isLoading?: boolean;
+  showPlaceholders?: boolean;
 }
 
 export const ProviderList: React.FC<ProviderListProps> = ({
   providers,
   onSelect,
-  parsedSummary
+  parsedSummary,
+  isLoading = false,
+  showPlaceholders = false
 }) => {
-  if (!providers.length) {
+  // Safe guards for undefined/null providers
+  if (!providers || !Array.isArray(providers)) {
     return (
       <div className="section-spacing">
         <p className="small-muted">
@@ -39,58 +45,61 @@ export const ProviderList: React.FC<ProviderListProps> = ({
     );
   }
 
+  if (isLoading && showPlaceholders) {
+    return (
+      <div className="section-spacing">
+        <div className="stack-tight">
+          <span className="field-label">Top matches</span>
+          <span className="small-muted">Searching for providers...</span>
+        </div>
+        <div className="providers-grid">
+          {[1, 2, 3].map((i) => (
+            <article key={i} className="provider-card placeholder">
+              <div className="provider-header">
+                <div className="stack-tight">
+                  <div className="placeholder-line" style={{ width: '60%', height: '20px' }} />
+                  <div className="placeholder-line" style={{ width: '80%', height: '16px' }} />
+                </div>
+              </div>
+              <div className="divider" />
+              <div className="pill-row">
+                <div className="placeholder-line" style={{ width: '40%', height: '24px' }} />
+                <div className="placeholder-line" style={{ width: '50%', height: '24px' }} />
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (providers.length === 0) {
+    return (
+      <div className="section-spacing">
+        <p className="small-muted">
+          No matches found. Try adjusting your skill, budget, or duration requirements.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="section-spacing">
       <div className="stack-tight">
         <span className="field-label">Top matches</span>
-        <span className="small-muted">{parsedSummary}</span>
+        <span className="small-muted">{parsedSummary || 'No summary available'}</span>
       </div>
       <div className="providers-grid">
-        {providers.map((p) => (
-          <article key={p.id} className="provider-card">
-            <div className="provider-header">
-              <div className="stack-tight">
-                <span className="provider-name">{p.name}</span>
-                <div className="provider-meta">
-                  <span className="badge-rating">
-                    ★ {p.rating.toFixed(1)} · {p.completedGigs} sessions
-                  </span>
-                  <span className="badge-price">{p.hourlyRateAda} ₳ / hour</span>
-                  <span className="badge-availability">
-                    {p.availability.join(' • ')} · {p.timezones.join(', ')}
-                  </span>
-                </div>
-              </div>
-              <div className="stack-tight" style={{ alignItems: 'flex-end' }}>
-                <span className="score-badge">Match {Math.round(p.score)}%</span>
-                <button className="btn btn-primary" onClick={() => onSelect(p)}>
-                  Start escrow
-                </button>
-              </div>
-            </div>
-            <div className="divider" />
-            <div className="pill-row">
-              {p.skills.map((skill) => (
-                <span key={skill} className="pill-soft">
-                  {skill}
-                </span>
-              ))}
-            </div>
-            <p className="small-muted mt-2">{p.bio}</p>
-            {p.reasons.length > 0 && (
-              <div className="mt-2">
-                <span className="small-muted">Why this match:</span>
-                <div className="pill-row mt-1">
-                  {p.reasons.map((reason, idx) => (
-                    <span key={idx} className="chip chip-muted">
-                      {reason}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </article>
-        ))}
+        {providers
+          .filter((p) => p && p.id) // Filter out invalid providers
+          .map((p) => (
+            <ProviderCard
+              key={p.id}
+              provider={p}
+              onSelect={onSelect}
+              isLoading={isLoading}
+            />
+          ))}
       </div>
     </div>
   );

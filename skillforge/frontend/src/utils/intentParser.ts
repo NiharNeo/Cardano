@@ -3,6 +3,7 @@ export interface ParsedIntent {
   skill: string | null;
   priceMax: number | null;
   durationMinutes: number | null;
+  urgency: 'low' | 'medium' | 'high' | null;
 }
 
 const SKILL_KEYWORDS: string[] = [
@@ -99,11 +100,22 @@ export function parseIntent(input: string): ParsedIntent {
     }
   }
 
+  // Urgency extraction
+  let urgency: 'low' | 'medium' | 'high' | null = null;
+  if (/\b(urgent|asap|immediately|right away|emergency|critical)\b/i.test(text)) {
+    urgency = 'high';
+  } else if (/\b(soon|quickly|fast|priority)\b/i.test(text)) {
+    urgency = 'medium';
+  } else if (/\b(whenever|flexible|no rush|eventually)\b/i.test(text)) {
+    urgency = 'low';
+  }
+
   return {
     rawText: text,
     skill,
     priceMax,
-    durationMinutes
+    durationMinutes,
+    urgency
   };
 }
 
