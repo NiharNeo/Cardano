@@ -24,6 +24,7 @@ interface ProviderListProps {
   parsedSummary: string;
   isLoading?: boolean;
   showPlaceholders?: boolean;
+  disabled?: boolean;
 }
 
 export const ProviderList: React.FC<ProviderListProps> = ({
@@ -31,7 +32,8 @@ export const ProviderList: React.FC<ProviderListProps> = ({
   onSelect,
   parsedSummary,
   isLoading = false,
-  showPlaceholders = false
+  showPlaceholders = false,
+  disabled = false
 }) => {
   // Safe guards for undefined/null providers
   if (!providers || !Array.isArray(providers)) {
@@ -98,6 +100,7 @@ export const ProviderList: React.FC<ProviderListProps> = ({
               provider={p}
               onSelect={onSelect}
               isLoading={isLoading}
+              disabled={disabled}
             />
           ))}
       </div>

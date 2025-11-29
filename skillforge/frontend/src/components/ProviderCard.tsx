@@ -5,9 +5,10 @@ interface ProviderCardProps {
   provider: ScoredProvider;
   onSelect: (provider: ScoredProvider) => void;
   isLoading?: boolean;
+  disabled?: boolean;
 }
 
-export const ProviderCard: React.FC<ProviderCardProps> = ({ provider, onSelect, isLoading }) => {
+export const ProviderCard: React.FC<ProviderCardProps> = ({ provider, onSelect, isLoading, disabled = false }) => {
   // Safe guards for undefined/null values
   if (!provider) {
     return (
@@ -59,7 +60,7 @@ export const ProviderCard: React.FC<ProviderCardProps> = ({ provider, onSelect, 
           <button
             className="btn btn-primary"
             onClick={() => onSelect(provider)}
-            disabled={isLoading}
+            disabled={isLoading || disabled}
           >
             Select Mentor
           </button>

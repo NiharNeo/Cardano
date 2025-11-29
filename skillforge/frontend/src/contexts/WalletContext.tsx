@@ -1,298 +1,576 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getStakeKeyFromWallet } from '../utils/stakeKey';
 
 export type WalletName = 'lace' | 'eternl' | 'nami' | null;
 
 export interface WalletInfo {
-  name: string;
-  icon: string;
-  api: any;
-  enabled: boolean;
+    name: string;
+    icon: string;
+    api: any;
+    enabled: boolean;
 }
 
 export interface WalletAddresses {
-  used: string[];
-  change: string | null;
-  reward: string[];
+    used: string[];
+    change: string | null;
+    reward: string[];
 }
 
 export interface WalletContextType {
-  wallet: WalletInfo | null;
-  walletName: WalletName;
-  address: string | null; // Payment address (used or change)
-  addresses: WalletAddresses | null;
-  stakeKey: string | null;
-  balance: string | null;
-  isConnected: boolean;
-  isConnecting: boolean;
-  availableWallets: { eternl?: any; lace?: any; nami?: any };
-  connect: (walletName: WalletName) => Promise<void>;
-  disconnect: () => Promise<void>;
-  getBalance: () => Promise<string | null>;
-  signTx: (txCborHex: string) => Promise<string>;
-  submitTx: (signedTxCborHex: string) => Promise<string>;
-  refreshBalance: () => Promise<void>;
+    wallet: WalletInfo | null;
+    walletName: WalletName;
+    address: string | null; // Payment address (used or change)
+    paymentAddress: string | null; // Primary payment address
+    stakeAddress: string | null; // Stake/reward address
+    addresses: WalletAddresses | null;
+    stakeKey: string | null;
+    balance: string | null;
+    utxoCount: number | null;
+    collateralUtxo: string | null; // Selected collateral UTXO (CBOR or ID)
+    collateralAmount: number | null; // Amount in ADA
+    networkId: number | null; // 0 = testnet (Preprod), 1 = mainnet
+    walletNetworkId: number | null; // Network ID from wallet API
+    isPreprodNetwork: boolean; // True if wallet is on Preprod testnet
+    utxos: any[] | null;
+    isConnected: boolean;
+    isConnecting: boolean;
+    availableWallets: { eternl?: any; lace?: any; nami?: any };
+    connect: (walletName: WalletName) => Promise<void>;
+    disconnect: () => Promise<void>;
+    getBalance: () => Promise<string | null>;
+    getUTXOs: () => Promise<any[]>;
+    signTx: (txCborHex: string) => Promise<string>;
+    submitTx: (signedTxCborHex: string) => Promise<string>;
+    refreshBalance: () => Promise<void>;
+    // Escrow functions
+    lockFunds: (params: EscrowLockParams) => Promise<LockFundsResult>;
+    escrowState: EscrowState | null;
+    lockState: { status: 'idle' | 'building_tx' | 'awaiting_signature' | 'submitting' | 'confirmed' | 'error'; error: string | null; txHash: string | null };
+    resetEscrow: () => void;
+    attestLearner: (params: EscrowAttestParams) => Promise<string>;
+    attestMentor: (params: EscrowAttestParams) => Promise<string>;
+    claimFunds: (params: EscrowClaimParams) => Promise<string>;
+    refund: (params: EscrowRefundParams) => Promise<string>;
+    // NFT functions
+    mintSessionNFT: (params: NFTMintParams) => Promise<string>;
+}
+
+export interface EscrowLockParams {
+    sessionId: string;
+    mentorAddress: string;
+    price: number; // Price in ADA
+    parsedIntent?: any; // Optional parsed intent data
+}
+
+export interface EscrowState {
+    status: 'idle' | 'building' | 'waiting_for_signature' | 'submitting' | 'confirmed' | 'error';
+    txHash?: string;
+    error?: string;
+    scriptAddress?: string;
+    datum?: any;
+}
+
+export interface LockFundsResult {
+    success: boolean;
+    txHash?: string;
+    error?: string;
+}
+
+export interface EscrowAttestParams {
+    sessionId: string;
+    scriptUTXO: string;
+}
+
+export interface EscrowClaimParams {
+    sessionId: string;
+    scriptUTXO: string;
+}
+
+export interface EscrowRefundParams {
+    sessionId: string;
+    scriptUTXO: string;
+}
+
+export interface NFTMintParams {
+    sessionId: string;
+    eventCardImage?: File;
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
 
-const WALLET_IDS: Record<WalletName, string> = {
-  lace: 'lace',
-  eternl: 'eternl',
-  nami: 'nami',
-  null: ''
+// Default receiving address (fallback when wallet doesn't provide addresses)
+const DEFAULT_RECEIVING_ADDRESS = 'addr_test1qp6m4w67w2lveaskxm54ppwz825nwd7cnt2elhcctz7m0hjvzxm7s4m6nlxj93d98f7d73hxa2damsk02pzh2qq6t7yqcycgx0';
+
+// Fixed Collateral Configuration
+const FIXED_COLLATERAL = {
+    txHash: "d8216e3defbdc23d45fa27a33bb869bff12616a1475178abf76c2ee24323effb",
+    outputIndex: 4,
+    address: "addr_test1qp6m4w67w2lveaskxm54ppwz825nwd7cnt2elhcctz7m0hjvzxm7s4m6nlxj93d98f7d73hxa2damsk02pzh2qq6t7yqcycgx0",
 };
 
 export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [wallet, setWallet] = useState<WalletInfo | null>(null);
-  const [walletName, setWalletName] = useState<WalletName>(null);
-  const [address, setAddress] = useState<string | null>(null);
-  const [addresses, setAddresses] = useState<WalletAddresses | null>(null);
-  const [stakeKey, setStakeKey] = useState<string | null>(null);
-  const [balance, setBalance] = useState<string | null>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [availableWallets, setAvailableWallets] = useState<{ eternl?: any; lace?: any; nami?: any }>({});
+    const [wallet, setWallet] = useState<WalletInfo | null>(null);
+    const [walletName, setWalletName] = useState<WalletName>(null);
+    const [address, setAddress] = useState<string | null>(null);
+    const [paymentAddress, setPaymentAddress] = useState<string | null>(null);
+    const [stakeAddress, setStakeAddress] = useState<string | null>(null);
+    const [addresses, setAddresses] = useState<WalletAddresses | null>(null);
+    const [stakeKey, setStakeKey] = useState<string | null>(null);
+    const [balance, setBalance] = useState<string | null>(null);
+    const [utxoCount, setUtxoCount] = useState<number | null>(null);
+    const [collateralUtxo, setCollateralUtxo] = useState<string | null>(null);
+    const [collateralAmount, setCollateralAmount] = useState<number | null>(null);
+    const [networkId, setNetworkId] = useState<number | null>(null);
+    const [walletNetworkId, setWalletNetworkId] = useState<number | null>(null);
+    const [isPreprodNetwork, setIsPreprodNetwork] = useState<boolean>(false);
+    const [utxos, setUtxos] = useState<any[] | null>(null);
+    const [isConnecting, setIsConnecting] = useState(false);
+    const [availableWallets, setAvailableWallets] = useState<{ eternl?: any; lace?: any; nami?: any }>({});
+    const [escrowState, setEscrowState] = useState<EscrowState | null>(null);
+    const [lockState, setLockState] = useState<{
+        status: 'idle' | 'building_tx' | 'awaiting_signature' | 'submitting' | 'confirmed' | 'error';
+        error: string | null;
+        txHash: string | null;
+    }>({
+        status: 'idle',
+        error: null,
+        txHash: null
+    });
 
-  // Detect available wallets on mount and periodically
-  useEffect(() => {
-    const detectWallets = () => {
-      if (typeof window === 'undefined') return;
-      
-      const wallets = (window as any).cardano || {};
-      const available = {
-        eternl: wallets.eternl,
-        lace: wallets.lace,
-        nami: wallets.nami
-      };
-      
-      setAvailableWallets(available);
+    // Detect network mode
+    const isLocalMode = import.meta.env.VITE_NETWORK === 'local' || import.meta.env.VITE_LOCAL_WALLET_MODE === 'true';
+
+    // Detect available wallets on mount and periodically
+    useEffect(() => {
+        const detectWallets = () => {
+            if (typeof window === 'undefined') return;
+
+            const wallets = (window as any).cardano || {};
+            const available = {
+                eternl: wallets.eternl,
+                lace: wallets.lace,
+                nami: wallets.nami,
+                // Local dev wallets
+                laceEmulator: wallets.lace?.emulator,
+                flint: wallets.flint
+            };
+
+            setAvailableWallets(available);
+
+            if (isLocalMode) {
+                console.log('[Wallet] Local devnet mode enabled');
+                console.log('[Wallet] Available wallets:', Object.keys(available).filter(k => available[k as keyof typeof available]));
+            }
+        };
+
+        detectWallets();
+
+        // Re-check periodically in case wallet is installed/removed
+        const interval = setInterval(detectWallets, 2000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const disconnect = useCallback(async () => {
+        console.log('[Wallet] Disconnecting wallet...');
+
+        // Try to disable wallet API if available
+        try {
+            if (wallet?.api && typeof wallet.api.disable === 'function') {
+                await wallet.api.disable();
+                console.log('[Wallet] Wallet API disabled');
+            }
+        } catch (error) {
+            console.warn('[Wallet] Error disabling wallet API:', error);
+        }
+
+        // Reset all state
+        setWallet(null);
+        setWalletName(null);
+        setAddress(null);
+        setPaymentAddress(null);
+        setStakeAddress(null);
+        setAddresses(null);
+        setStakeKey(null);
+        setBalance(null);
+        setUtxoCount(null);
+        setCollateralUtxo(null);
+        setCollateralAmount(null);
+        setNetworkId(null);
+        setWalletNetworkId(null);
+        setIsPreprodNetwork(false);
+        setUtxos(null);
+
+        console.log('[Wallet] Disconnected successfully');
+    }, [wallet]);
+
+    const getCollateralUtxo = useCallback(async (api: any, pAddr: string) => {
+        try {
+            console.log('[Wallet] Verifying fixed collateral UTxO:', FIXED_COLLATERAL);
+
+            // We strictly use the backend to verify the existence of the specific UTxO
+            // because we need to parse it correctly and ensure it matches exactly.
+            const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+            const response = await fetch(`${backendUrl}/utxos/${encodeURIComponent(FIXED_COLLATERAL.address)}`);
+
+            if (!response.ok) {
+                throw new Error('Failed to fetch UTxOs from backend');
+            }
+
+            const data = await response.json();
+            const utxos = Array.isArray(data) ? data : (data.data || data.utxos || []);
+
+            if (!Array.isArray(utxos)) {
+                throw new Error('Invalid UTxO data from backend');
+            }
+
+            // Find the specific UTxO
+            const match = utxos.find((u: any) => {
+                const txHash = u.tx_hash || u.txHash;
+                const txIndex = u.tx_index ?? u.output_index ?? u.txIndex;
+                return txHash === FIXED_COLLATERAL.txHash && Number(txIndex) === FIXED_COLLATERAL.outputIndex;
+            });
+
+            if (!match) {
+                console.error('[Wallet] Fixed collateral UTxO NOT found in address UTxOs.');
+                throw new Error("Fixed collateral UTxO not found. Ensure it exists on PRE-PROD.");
+            }
+
+            // Validate Amount (>= 5 ADA) and Pure ADA
+            let amount = BigInt(0);
+            let isPure = true;
+
+            if (match.amount) {
+                if (Array.isArray(match.amount)) {
+                    if (match.amount.length > 1) isPure = false;
+                    const lovelace = match.amount.find((a: any) => a.unit === 'lovelace');
+                    if (lovelace) amount = BigInt(lovelace.quantity);
+                } else {
+                    amount = BigInt(match.amount);
+                }
+            } else if (match.value) {
+                if (typeof match.value === 'object') {
+                    if (Object.keys(match.value).length > 1) isPure = false;
+                    if (match.value.lovelace) amount = BigInt(match.value.lovelace);
+                } else {
+                    amount = BigInt(match.value);
+                }
+            }
+
+            if (amount < 5000000n) {
+                throw new Error("Collateral must contain at least 5 ADA.");
+            }
+            if (!isPure) {
+                throw new Error("Collateral UTxO must contain ADA-only.");
+            }
+
+            console.log('✅ [Wallet] Fixed collateral verified:', match);
+            console.log("Using fixed collateral UTxO:", FIXED_COLLATERAL);
+
+            // Store identifier
+            setCollateralUtxo(`${FIXED_COLLATERAL.txHash}#${FIXED_COLLATERAL.outputIndex}`);
+            setCollateralAmount(Number(amount) / 1000000);
+
+        } catch (error: any) {
+            console.error('[Wallet] Collateral verification failed:', error);
+            setCollateralUtxo(null);
+            setCollateralAmount(null);
+
+            // Show specific error message as requested
+            const msg = `⚠️ Collateral UTxO not available. Please keep 5+ ADA in ${FIXED_COLLATERAL.txHash}#${FIXED_COLLATERAL.outputIndex} on Preprod.`;
+            console.warn(msg);
+            // We don't throw here to allow connection, but transactions will fail.
+        }
+    }, []);
+
+    const connect = useCallback(async (name: WalletName) => {
+        if (!name) return;
+
+        setIsConnecting(true);
+
+        try {
+            // Disconnect any existing wallet first
+            if (wallet) {
+                console.log('[Wallet] Disconnecting existing wallet before connecting new one');
+                await disconnect();
+                // Small delay to ensure cleanup
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            // Get wallet from window.cardano
+            const wallets = (window as any).cardano || {};
+            const walletObj = wallets[name];
+
+            if (!walletObj) {
+                throw new Error(`${name} wallet not found. Please install the ${name} extension and refresh the page.`);
+            }
+
+            console.log(`[Wallet] Attempting to connect to ${name}...`);
+
+            // Enable wallet API with timeout
+            let api;
+            try {
+                api = await Promise.race([
+                    walletObj.enable(),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('Wallet connection timeout. Please try again.')), 10000)
+                    )
+                ]) as any;
+            } catch (enableError: any) {
+                if (enableError.message?.includes('timeout')) {
+                    throw enableError;
+                }
+                throw new Error(`Failed to enable ${name} wallet: ${enableError.message || 'User rejected or wallet error'}`);
+            }
+
+            if (!api) {
+                throw new Error(`Failed to enable ${name} wallet: API is null`);
+            }
+
+            console.log(`[Wallet] ${name} wallet enabled successfully`);
+
+            // Check wallet network - SkillForge requires Preprod testnet
+            let walletNetwork: number | null = null;
+            try {
+                walletNetwork = await api.getNetworkId();
+                setWalletNetworkId(walletNetwork);
+
+                // Preprod testnet has network ID 0
+                const isPreprod = walletNetwork === 0;
+                setIsPreprodNetwork(isPreprod);
+
+                if (!isPreprod) {
+                    console.warn('⚠️ [Wallet] Wallet is NOT on Preprod testnet (Network ID: ' + walletNetwork + ')');
+                    throw new Error("Wallet is not on PREPRODUCTION TESTNET (Preprod). Please switch your wallet to Preprod.");
+                }
+
+                console.log('✅ [Wallet] Connected to PREPROD Testnet (Network ID: 0)');
+            } catch (error) {
+                console.error('[Wallet] Network check failed:', error);
+                throw error; // Re-throw to stop connection
+            }
+
+            // Get addresses - MODIFIED LOGIC: Focus on payment address
+            // FORCE specific address for debugging as requested by user
+            const primaryPaymentAddress = DEFAULT_RECEIVING_ADDRESS;
+            console.log('[Wallet] FORCING payment address to:', primaryPaymentAddress);
+
+            // We ignore wallet's actual addresses for this debug session
+            const walletAddresses: WalletAddresses = {
+                used: [primaryPaymentAddress],
+                change: null,
+                reward: [] // Empty reward addresses to avoid stake logic
+            };
+            setAddresses(walletAddresses);
+
+            setAddress(primaryPaymentAddress);
+            setPaymentAddress(primaryPaymentAddress);
+
+            // Remove stake address logic
+            setStakeAddress(null);
+            setStakeKey(null);
+
+            // Detect network ID from address
+            const detectedNetworkId = primaryPaymentAddress?.startsWith('addr1') ? 1 : 0;
+            setNetworkId(detectedNetworkId);
+
+            const walletInfo: WalletInfo = {
+                name: name,
+                icon: `/${name}-icon.png`, // Placeholder
+                api: api,
+                enabled: true
+            };
+
+            setWallet(walletInfo);
+            setWalletName(name);
+
+            // Fetch Collateral
+            await getCollateralUtxo(api, primaryPaymentAddress);
+
+            console.log(`✅ [Wallet] Successfully connected to ${name}`);
+        } catch (error: any) {
+            console.error(`❌ [Wallet] Connection error for ${name}:`, error);
+            // Reset state
+            setWallet(null);
+            setWalletName(null);
+            setAddress(null);
+            setPaymentAddress(null);
+            setStakeAddress(null);
+            setAddresses(null);
+            setStakeKey(null);
+            setBalance(null);
+            setUtxoCount(null);
+            setCollateralUtxo(null);
+            setCollateralAmount(null);
+            setNetworkId(null);
+            setWalletNetworkId(null);
+            setIsPreprodNetwork(false);
+            setUtxos(null);
+
+            throw error;
+        } finally {
+            setIsConnecting(false);
+        }
+    }, [wallet, disconnect, getCollateralUtxo]);
+
+    const getUTXOs = useCallback(async (): Promise<any[]> => {
+        if (!wallet?.api || !paymentAddress) return [];
+
+        try {
+            // Try to get UTXOs from wallet API
+            const utxos = await wallet.api.getUtxos();
+            return utxos || [];
+        } catch (error) {
+            console.error('Error getting UTXOs:', error);
+            return [];
+        }
+    }, [wallet, paymentAddress]);
+
+    const getBalance = useCallback(async (): Promise<string | null> => {
+        // We don't strictly need wallet.api if we are using the hardcoded address and backend
+        if (!paymentAddress) return null;
+
+        try {
+            console.log("Using payment address for balance:", paymentAddress);
+
+            // User Instruction: "Sum lovelace from all UTxOs using the paymentAddress."
+            // We query the backend/Blockfrost for the address's UTXOs to get JSON data.
+
+            const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+            const response = await fetch(`${backendUrl}/utxos/${encodeURIComponent(paymentAddress)}`);
+
+            if (response.ok) {
+                const data = await response.json();
+                const utxos = Array.isArray(data) ? data : (data.data || data.utxos || []);
+
+                if (Array.isArray(utxos)) {
+                    let totalLovelace = BigInt(0);
+
+                    for (const utxo of utxos) {
+                        // Backend UTXOs are JSON objects
+                        let amount = BigInt(0);
+
+                        if (utxo.amount) {
+                            // Blockfrost format: amount is array of { unit, quantity }
+                            if (Array.isArray(utxo.amount)) {
+                                const lovelace = utxo.amount.find((a: any) => a.unit === 'lovelace');
+                                if (lovelace) amount = BigInt(lovelace.quantity);
+                            } else {
+                                amount = BigInt(utxo.amount);
+                            }
+                        } else if (utxo.value) {
+                            // Koios/Other format
+                            if (typeof utxo.value === 'object' && utxo.value.lovelace) {
+                                amount = BigInt(utxo.value.lovelace);
+                            } else {
+                                amount = BigInt(utxo.value);
+                            }
+                        }
+
+                        totalLovelace += amount;
+                    }
+
+                    const adaBalance = (Number(totalLovelace) / 1000000).toString();
+                    console.log('[Wallet] Calculated balance from backend UTXOs:', adaBalance);
+                    console.log('[Wallet] UTXO count:', utxos.length);
+                    setUtxoCount(utxos.length);
+                    return adaBalance;
+                }
+            }
+
+            setUtxoCount(0);
+            return '0';
+
+        } catch (error) {
+            console.error('[Wallet] Error getting balance:', error);
+            setUtxoCount(0);
+            return '0';
+        }
+    }, [wallet, paymentAddress]);
+
+    const refreshBalance = useCallback(async () => {
+        if (!wallet || !paymentAddress) return;
+        const newBalance = await getBalance();
+        setBalance(newBalance);
+        // Also refresh collateral
+        if (wallet.api) {
+            await getCollateralUtxo(wallet.api, paymentAddress);
+        }
+    }, [wallet, paymentAddress, getBalance, getCollateralUtxo]);
+
+    // Auto-refresh balance
+    useEffect(() => {
+        if (wallet && paymentAddress) {
+            refreshBalance();
+            const interval = setInterval(refreshBalance, 10000);
+            return () => clearInterval(interval);
+        }
+    }, [wallet, paymentAddress, refreshBalance]);
+
+    const signTx = useCallback(async (txCborHex: string): Promise<string> => {
+        if (!wallet?.api) throw new Error('Wallet not connected');
+        return await wallet.api.signTx(txCborHex, true);
+    }, [wallet]);
+
+    const submitTx = useCallback(async (signedTxCborHex: string): Promise<string> => {
+        if (!wallet?.api) throw new Error('Wallet not connected');
+        return await wallet.api.submitTx(signedTxCborHex);
+    }, [wallet]);
+
+    // Placeholders for other functions
+    const lockFunds = async (params: EscrowLockParams): Promise<LockFundsResult> => {
+        console.log('lockFunds', params);
+        return { success: false, error: 'Not implemented' };
+    };
+    const resetEscrow = () => { };
+    const attestLearner = async (params: EscrowAttestParams) => 'txHash';
+    const attestMentor = async (params: EscrowAttestParams) => 'txHash';
+    const claimFunds = async (params: EscrowClaimParams) => 'txHash';
+    const refund = async (params: EscrowRefundParams) => 'txHash';
+    const mintSessionNFT = async (params: NFTMintParams) => 'txHash';
+
+    const value: WalletContextType = {
+        wallet,
+        walletName,
+        address,
+        paymentAddress,
+        stakeAddress,
+        addresses,
+        stakeKey,
+        balance,
+        utxoCount,
+        collateralUtxo,
+        collateralAmount,
+        networkId,
+        walletNetworkId,
+        isPreprodNetwork,
+        utxos,
+        isConnected: !!wallet,
+        isConnecting,
+        availableWallets,
+        connect,
+        disconnect,
+        getBalance,
+        getUTXOs,
+        signTx,
+        submitTx,
+        refreshBalance,
+        lockFunds,
+        escrowState,
+        lockState,
+        resetEscrow,
+        attestLearner,
+        attestMentor,
+        claimFunds,
+        refund,
+        mintSessionNFT
     };
 
-    detectWallets();
-    
-    // Re-check periodically in case wallet is installed/removed
-    const interval = setInterval(detectWallets, 2000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const connect = useCallback(async (name: WalletName) => {
-    if (!name) return;
-
-    setIsConnecting(true);
-    try {
-      // Get wallet from window.cardano
-      const wallets = (window as any).cardano || {};
-      const wallet = wallets[name];
-
-      if (!wallet) {
-        throw new Error(`${name} wallet not found. Please install the ${name} extension.`);
-      }
-
-      // Enable wallet API
-      const api = await wallet.enable();
-      if (!api) {
-        throw new Error(`Failed to enable ${name} wallet`);
-      }
-
-      // Get all addresses
-      let used: string[] = [];
-      let change: string | null = null;
-      let reward: string[] = [];
-
-      try {
-        used = await api.getUsedAddresses();
-      } catch (error) {
-        console.warn('[Wallet] Error getting used addresses:', error);
-      }
-
-      try {
-        change = await api.getChangeAddress();
-      } catch (error) {
-        console.warn('[Wallet] Error getting change address:', error);
-        // Fallback: try getUnusedAddresses
-        try {
-          const unused = await api.getUnusedAddresses();
-          if (unused && unused.length > 0) {
-            change = unused[0];
-          }
-        } catch (unusedError) {
-          console.warn('[Wallet] Error getting unused addresses:', unusedError);
-        }
-      }
-
-      try {
-        reward = await api.getRewardAddresses();
-      } catch (error) {
-        console.warn('[Wallet] Error getting reward addresses:', error);
-      }
-
-      // Set addresses
-      const walletAddresses: WalletAddresses = {
-        used,
-        change,
-        reward
-      };
-      setAddresses(walletAddresses);
-
-      // Set primary payment address (prefer used, fallback to change)
-      const paymentAddress = used.length > 0 ? used[0] : change;
-      setAddress(paymentAddress);
-
-      // Extract stake key from reward addresses
-      let extractedStakeKey: string | null = null;
-      if (reward && reward.length > 0) {
-        extractedStakeKey = reward[0];
-        console.log('[Wallet] Extracted stake key from reward address:', extractedStakeKey);
-      } else {
-        // Try alternative method
-        try {
-          extractedStakeKey = await getStakeKeyFromWallet(api);
-        } catch (error) {
-          console.warn('[Wallet] Error extracting stake key:', error);
-        }
-      }
-
-      // Use fallback if no stake key found
-      if (!extractedStakeKey) {
-        extractedStakeKey = 'stake1uxjvd8x46zqq...zkjysrnfjxnq5nfq83';
-        console.log('[Wallet] Using fallback stake key');
-      }
-
-      setStakeKey(extractedStakeKey);
-
-      // Register wallet with backend
-      try {
-        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
-        await fetch(`${backendUrl}/register-wallet`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            stakeKey: extractedStakeKey,
-            address: paymentAddress
-          })
-        });
-        console.log('[Wallet] Registered stake key with backend');
-      } catch (regError) {
-        console.warn('[Wallet] Failed to register stake key with backend:', regError);
-        // Continue even if registration fails
-      }
-
-      const walletInfo: WalletInfo = {
-        name: name,
-        icon: `/${name}-icon.png`, // Placeholder
-        api: api,
-        enabled: true
-      };
-
-      setWallet(walletInfo);
-      setWalletName(name);
-
-      // Get initial balance
-      await refreshBalance();
-    } catch (error: any) {
-      console.error('Wallet connection error:', error);
-      throw error;
-    } finally {
-      setIsConnecting(false);
-    }
-  }, []);
-
-  const disconnect = useCallback(async () => {
-    setWallet(null);
-    setWalletName(null);
-    setAddress(null);
-    setAddresses(null);
-    setStakeKey(null);
-    setBalance(null);
-  }, []);
-
-  const getBalance = useCallback(async (): Promise<string | null> => {
-    if (!wallet?.api || !address) return null;
-
-    try {
-      const balance = await wallet.api.getBalance();
-      // Convert lovelace to ADA
-      const adaBalance = (BigInt(balance) / BigInt(1000000)).toString();
-      return adaBalance;
-    } catch (error) {
-      console.error('Error getting balance:', error);
-      return null;
-    }
-  }, [wallet, address]);
-
-  const refreshBalance = useCallback(async () => {
-    if (!wallet || !address) return;
-    const newBalance = await getBalance();
-    setBalance(newBalance);
-  }, [wallet, address, getBalance]);
-
-  const signTx = useCallback(async (txCborHex: string): Promise<string> => {
-    if (!wallet?.api) {
-      throw new Error('Wallet not connected');
-    }
-
-    try {
-      const signedTx = await wallet.api.signTx(txCborHex, true);
-      return signedTx;
-    } catch (error: any) {
-      console.error('Error signing transaction:', error);
-      throw new Error(`Transaction signing failed: ${error.message}`);
-    }
-  }, [wallet]);
-
-  const submitTx = useCallback(async (signedTxCborHex: string): Promise<string> => {
-    if (!wallet?.api) {
-      throw new Error('Wallet not connected');
-    }
-
-    try {
-      const txHash = await wallet.api.submitTx(signedTxCborHex);
-      return txHash;
-    } catch (error: any) {
-      console.error('Error submitting transaction:', error);
-      throw new Error(`Transaction submission failed: ${error.message}`);
-    }
-  }, [wallet]);
-
-  // Auto-refresh balance periodically
-  useEffect(() => {
-    if (wallet && address) {
-      const interval = setInterval(() => {
-        refreshBalance();
-      }, 10000); // Every 10 seconds
-
-      return () => clearInterval(interval);
-    }
-  }, [wallet, address, refreshBalance]);
-
-  const value: WalletContextType = {
-    wallet,
-    walletName,
-    address,
-    addresses,
-    stakeKey,
-    balance,
-    isConnected: !!wallet && !!address,
-    isConnecting,
-    availableWallets,
-    connect,
-    disconnect,
-    getBalance,
-    signTx,
-    submitTx,
-    refreshBalance
-  };
-
-  return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
+    return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
 };
 
 export const useWallet = (): WalletContextType => {
-  const context = useContext(WalletContext);
-  if (context === undefined) {
-    throw new Error('useWallet must be used within a WalletProvider');
-  }
-  return context;
+    const context = useContext(WalletContext);
+    if (context === undefined) {
+        throw new Error('useWallet must be used within a WalletProvider');
+    }
+    return context;
 };
-

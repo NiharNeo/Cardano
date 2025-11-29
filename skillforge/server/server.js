@@ -14,7 +14,7 @@ const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 4000;
+const port = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
@@ -24,7 +24,7 @@ const escrowStore = new Map();
 
 const BLOCKFROST_PROJECT_ID = process.env.BLOCKFROST_PROJECT_ID;
 const BLOCKFROST_BASE_URL =
-  process.env.BLOCKFROST_BASE_URL || 'https://cardano-mainnet.blockfrost.io/api/v0';
+  process.env.BLOCKFROST_BASE_URL || 'https://cardano-preprod.blockfrost.io/api/v0';
 
 if (!BLOCKFROST_PROJECT_ID) {
   // This warning keeps things hackathon-friendly: you can still run the server
@@ -72,6 +72,26 @@ app.get('/protocol-params', async (_req, res) => {
 app.get('/utxos/:address', async (req, res) => {
   const { address } = req.params;
   if (!BLOCKFROST_PROJECT_ID) {
+    // Mock data for the specific test address
+    if (address === 'addr_test1qp6m4w67w2lveaskxm54ppwz825nwd7cnt2elhcctz7m0hjvzxm7s4m6nlxj93d98f7d73hxa2damsk02pzh2qq6t7yqcycgx0') {
+      return res.json([
+        {
+          "tx_hash": "d8216e3defbdc23d45fa27a33bb869bff12616a1475178abf76c2ee24323effb",
+          "output_index": 4,
+          "amount": [{ "unit": "lovelace", "quantity": "5000000" }],
+          "block": "mock_block",
+          "data_hash": null
+        },
+        {
+          "tx_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "output_index": 0,
+          "amount": [{ "unit": "lovelace", "quantity": "995000000" }],
+          "block": "mock_block",
+          "data_hash": null
+        }
+      ]);
+    }
+
     return res.json({
       from: 'stub',
       address,

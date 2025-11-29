@@ -1,0 +1,12 @@
+# Devnet data
+data/
+keys/*.skey
+genesis/
+configs/*.json
+
+# Keep address files
+!keys/payment.addr
+!keys/*.vkey
+
+
+

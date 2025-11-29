@@ -47,9 +47,10 @@ export interface EscrowInitRequest {
 }
 
 export interface EscrowInitResponse {
-  txBody: string; // CBOR hex
+  txBody: string; // CBOR hex (unsigned)
   escrowAddress: string;
   escrowId: string;
+  datum?: any; // Escrow datum for debugging
 }
 
 export interface EscrowStatusRequest {

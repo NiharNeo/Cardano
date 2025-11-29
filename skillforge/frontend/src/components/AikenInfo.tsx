@@ -7,6 +7,7 @@ interface AikenInfoProps {
 
 export const AikenInfo: React.FC<AikenInfoProps> = ({ escrowHash, nftPolicyId }) => {
   const [expanded, setExpanded] = useState(false);
+  const isLocalMode = import.meta.env.VITE_NETWORK === 'local' || import.meta.env.VITE_LOCAL_WALLET_MODE === 'true';
 
   if (!escrowHash && !nftPolicyId) {
     return null;
@@ -41,6 +42,24 @@ export const AikenInfo: React.FC<AikenInfoProps> = ({ escrowHash, nftPolicyId })
           {expanded ? '▼' : '▶'}
         </span>
       </div>
+
+      {isLocalMode && (
+        <div style={{
+          marginTop: '0.75rem',
+          padding: '0.5rem',
+          backgroundColor: '#fef3c7',
+          border: '1px solid #fbbf24',
+          borderRadius: '6px',
+          fontSize: '0.75rem'
+        }}>
+          <div style={{ fontWeight: 600, color: '#92400e', marginBottom: '0.25rem' }}>
+            🚀 LOCAL DEVNET — INFINITE ADA
+          </div>
+          <div style={{ color: '#78350f', fontSize: '0.7rem' }}>
+            Running on local Cardano network. All transactions confirm instantly. Use faucet to fund addresses.
+          </div>
+        </div>
+      )}
 
       {expanded && (
         <div style={{ marginTop: '0.75rem', fontSize: '0.75rem' }}>

@@ -3,6 +3,7 @@ import { useWallet } from '../contexts/WalletContext';
 import { createSession, initEscrow } from '../services/api';
 import type { ParsedIntent } from '../utils/intentParser';
 import type { ScoredProvider } from './ProviderList';
+import WalletBalanceDisplay from './WalletBalanceDisplay';
 
 interface EscrowModalProps {
   provider: ScoredProvider | null;
@@ -20,6 +21,7 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
   intent
 }) => {
   const wallet = useWallet();
+  const { lockState, resetEscrow } = wallet;
   const [isLocking, setIsLocking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,28 +73,29 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
         stakeKey: wallet.stakeKey || undefined
       });
 
-      // Step 2: Initialize escrow
+      // Step 2: Initialize escrow using wallet lockFunds function
       // Note: In production, providerAddress would come from provider's wallet
       // For now, we'll use a placeholder
-      const providerAddress = wallet.address; // Placeholder - should be provider's address
+      const providerAddress = wallet.paymentAddress || wallet.address || ''; // Placeholder - should be provider's address
 
-      const escrowResponse = await initEscrow({
-        learnerAddress: wallet.address,
-        providerAddress,
-        price: amountAda,
+      // Use wallet lockFunds function which handles signing and submission
+      const lockResult = await wallet.lockFunds({
         sessionId: sessionResponse.sessionId,
-        stakeKey: wallet.stakeKey || undefined
+        mentorAddress: providerAddress,
+        price: amountAda,
+        parsedIntent: intent
       });
 
-      // Step 3: Sign the transaction
-      const signedTx = await wallet.signTx(escrowResponse.txBody);
+      if (!lockResult.success || !lockResult.txHash) {
+        throw new Error(lockResult.error || 'Failed to lock funds');
+      }
 
-      // Step 4: Submit the transaction
-      const txId = await wallet.submitTx(signedTx);
+      const txId = lockResult.txHash;
 
       // Step 5: Update escrow state in backend with transaction ID
       try {
-        await fetch(`${import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000'}/escrow/update`, {
+        const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+        await fetch(`${backendUrl}/escrow/update`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -103,16 +106,34 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
             utxo: `${txId}#0` // Placeholder UTXO format
           })
         });
+        console.log('[EscrowModal] Escrow state updated successfully');
       } catch (err) {
-        console.error('Error updating escrow state:', err);
-        // Continue even if update fails
+        console.error('[EscrowModal] Error updating escrow state:', err);
+        // Don't throw - transaction was already submitted
       }
 
       // Step 6: Notify parent component
-      onEscrowLocked(txId, escrowResponse.escrowId, sessionResponse.sessionId);
+      onEscrowLocked(txId, 'escrow-id', sessionResponse.sessionId);
     } catch (err: any) {
-      console.error('Error locking escrow:', err);
-      setError(err.message || 'Failed to lock escrow. Please try again.');
+      console.error('[EscrowModal] Error locking escrow:', err);
+      const errorMessage = err.message || err.error || 'Failed to lock escrow. Please try again.';
+      setError(errorMessage);
+      
+      // Show user-friendly error
+      if (err.message?.includes('Wallet not connected')) {
+        setError('Please connect your wallet to proceed');
+      } else if (err.message?.includes('NO_UTXOS')) {
+        setError('Insufficient funds. Please ensure your wallet has enough ADA.');
+      } else {
+        setError(errorMessage);
+      }
+      
+      // Reset escrow state on error to allow retry
+      if (lockState?.status === 'error') {
+        setTimeout(() => {
+          resetEscrow();
+        }, 1000);
+      }
     } finally {
       setIsLocking(false);
     }
@@ -123,12 +144,23 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
   const durationHours = intent?.durationMinutes ? intent.durationMinutes / 60 : 1;
   const totalAmount = provider.hourlyRateAda * durationHours;
   
+  // Check if escrow is in progress (disable button if building, awaiting signature, or submitting)
+  const isEscrowInProgress = lockState?.status === 'building_tx' || 
+                             lockState?.status === 'awaiting_signature' || 
+                             lockState?.status === 'submitting';
+  
+  // Allow retry if error state
+  const canRetry = lockState?.status === 'error';
+  
   console.log('[EscrowModal] Render state:', {
     ready,
     isConnected: wallet.isConnected,
     hasAddress: !!wallet.address,
     hasIntent: !!intent,
-    intentSkill: intent?.skill
+    intentSkill: intent?.skill,
+    lockStateStatus: lockState?.status,
+    isEscrowInProgress,
+    canRetry
   });
 
   return (
@@ -203,20 +235,48 @@ export const EscrowModal: React.FC<EscrowModalProps> = ({
                 </span>
               </div>
             )}
+
+            {wallet.isConnected && (
+              <div className="mt-3">
+                <WalletBalanceDisplay minAdaRequired={10} />
+              </div>
+            )}
           </div>
         </div>
         <div className="modal-footer">
           <button className="btn btn-ghost" type="button" onClick={onClose} disabled={isLocking}>
             Cancel
           </button>
-          <button
-            className="btn btn-primary"
-            type="button"
-            disabled={isLocking || !ready}
-            onClick={handleLockEscrow}
-          >
-            {isLocking ? 'Locking escrow…' : `Lock ${totalAmount.toFixed(2)} ₳ in escrow`}
-          </button>
+          {canRetry && resetEscrow ? (
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={() => {
+                resetEscrow();
+                setError(null);
+                handleLockEscrow();
+              }}
+            >
+              Retry Escrow
+            </button>
+          ) : (
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={isLocking || !ready || isEscrowInProgress}
+              onClick={handleLockEscrow}
+            >
+              {isLocking || isEscrowInProgress
+                ? lockState?.status === 'building_tx'
+                  ? 'Building transaction…'
+                  : lockState?.status === 'awaiting_signature'
+                  ? 'Awaiting signature…'
+                  : lockState?.status === 'submitting'
+                  ? 'Submitting…'
+                  : 'Locking escrow…'
+                : `Lock ${totalAmount.toFixed(2)} ₳ in escrow`}
+            </button>
+          )}
         </div>
       </div>
     </div>

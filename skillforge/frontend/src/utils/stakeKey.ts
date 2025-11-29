@@ -78,7 +78,7 @@ export async function getStakeKeyFromWallet(walletApi: any): Promise<string | nu
 
     // Last resort: Use the provided stake key
     // In production, you'd decode the Bech32 address properly
-    return 'stake1uxjvd8x46zqq...zkjysrnfjxnq5nfq83';
+    return 'stake_test1upxprdlg2aaflnfzckjn5lxlgmnw4x7act84q3t4qqd9lzqjtjam3';
   } catch (error) {
     console.error('Error getting stake key from wallet:', error);
     return null;

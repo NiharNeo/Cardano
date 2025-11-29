@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../config/database';
-import { buildNFTMintTransaction, getUTXOs, getEscrowValidatorHash } from '../services/cardano';
+import { getUTXOs } from '../services/cardano';
+import { buildNFTMintTx } from '../services/transactionBuilder';
 import { uploadMetadata, uploadImage, getIPFSUrl } from '../services/ipfs';
 import { NFTMintRequest, NFTMintResponse } from '../types';
 import multer from 'multer';
@@ -33,13 +34,16 @@ const upload = multer({
 // POST /nft/mint - Generate NFT metadata, upload to IPFS, and build minting transaction
 router.post('/mint', upload.single('eventCardImage'), async (req: Request, res: Response) => {
   try {
-    console.log('POST /nft/mint - Request received');
+    console.log('[NFT MINT] Request received');
+    console.log('[NFT MINT] Request body:', JSON.stringify(req.body, null, 2));
+    
     const { sessionId, stakeKey }: NFTMintRequest = req.body;
     const eventCardImage = req.file;
-    console.log('NFT mint params:', { sessionId, hasImage: !!eventCardImage, stakeKey });
+    console.log('[NFT MINT] Params:', { sessionId, hasImage: !!eventCardImage, hasStakeKey: !!stakeKey });
 
     if (!sessionId) {
-      return res.status(400).json({ error: 'Missing sessionId' });
+      console.error('[NFT MINT] Validation failed: sessionId missing');
+      return res.status(400).json({ success: false, error: 'Missing sessionId' });
     }
 
     // Get session details
@@ -134,13 +138,43 @@ router.post('/mint', upload.single('eventCardImage'), async (req: Request, res: 
     }
 
     // Step 8: Build minting transaction using NFT minting policy
-    const { txBody, policyId, assetName } = await buildNFTMintTransaction(
-      session.id,
-      metadataCid,
-      escrow.utxo,
-      session.learner_address,
-      learnerUTXOs
-    );
+    console.log('[NFT MINT] Building mint transaction');
+    console.log('[NFT MINT] Session ID:', session.id);
+    console.log('[NFT MINT] Learner address:', session.learner_address);
+    console.log('[NFT MINT] Escrow UTXO:', escrow.utxo);
+    
+    let txHex: string;
+    let policyId: string;
+    let assetName: string;
+    
+    try {
+      const mintResult = await buildNFTMintTx({
+        sessionId: session.id,
+        learnerAddress: session.learner_address,
+        learnerUTXOs,
+        escrowUTXO: escrow.utxo
+      });
+      
+      txHex = mintResult.txHex;
+      policyId = mintResult.policyId;
+      assetName = mintResult.assetName;
+      
+      if (!txHex) {
+        throw new Error('Transaction builder did not return txHex');
+      }
+      
+      console.log('[NFT MINT] Transaction built successfully');
+      console.log('[NFT MINT] Policy ID:', policyId);
+      console.log('[NFT MINT] Asset name:', assetName);
+    } catch (buildError: any) {
+      console.error('[NFT MINT] Transaction build failed:', buildError);
+      console.error('[NFT MINT] Build error stack:', buildError.stack);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to build NFT mint transaction',
+        message: buildError.message
+      });
+    }
 
     // Step 10: Store NFT metadata in database with both CIDs
     await pool.query(
@@ -156,9 +190,9 @@ router.post('/mint', upload.single('eventCardImage'), async (req: Request, res: 
     );
 
     const response: NFTMintResponse = {
-      txBody,
+      txBody: txHex,
       policyId,
-      assetName: `SkillForge-Session-${session.id}`,
+      assetName,
       ipfsCid: metadataCid,
       imageCid: imageCid || undefined,
       metadataUrl,

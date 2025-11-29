@@ -1,0 +1,170 @@
+version: '3.8'
+
+services:
+  # Cardano Node 1
+  cardano-node-1:
+    image: inputoutput/cardano-node:8.1.2
+    container_name: skillforge-node-1
+    volumes:
+      - ./configs:/config
+      - ./data/node-1:/data
+      - ./genesis:/genesis
+    command:
+      - run
+      - --config
+      - /config/node-config.json
+      - --topology
+      - /config/topology.json
+      - --database-path
+      - /data/db
+      - --socket-path
+      - /data/node.socket
+      - --port
+      - "3001"
+    networks:
+      - cardano-network
+    environment:
+      - NETWORK=local
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "cardano-cli", "query", "tip", "--testnet-magic", "42", "--socket-path", "/data/node.socket"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Cardano Node 2
+  cardano-node-2:
+    image: inputoutput/cardano-node:8.1.2
+    container_name: skillforge-node-2
+    volumes:
+      - ./configs:/config
+      - ./data/node-2:/data
+      - ./genesis:/genesis
+    command:
+      - run
+      - --config
+      - /config/node-config.json
+      - --topology
+      - /config/topology.json
+      - --database-path
+      - /data/db
+      - --socket-path
+      - /data/node.socket
+      - --port
+      - "3002"
+    networks:
+      - cardano-network
+    depends_on:
+      - cardano-node-1
+    environment:
+      - NETWORK=local
+
+  # Cardano Node 3
+  cardano-node-3:
+    image: inputoutput/cardano-node:8.1.2
+    container_name: skillforge-node-3
+    volumes:
+      - ./configs:/config
+      - ./data/node-3:/data
+      - ./genesis:/genesis
+    command:
+      - run
+      - --config
+      - /config/node-config.json
+      - --topology
+      - /config/topology.json
+      - --database-path
+      - /data/db
+      - --socket-path
+      - /data/node.socket
+      - --port
+      - "3003"
+    networks:
+      - cardano-network
+    depends_on:
+      - cardano-node-1
+    environment:
+      - NETWORK=local
+
+  # Ogmios Server
+  ogmios:
+    image: cardanosolutions/ogmios:v6.0.0
+    container_name: skillforge-ogmios
+    volumes:
+      - ./data/node-1:/data
+    command:
+      - --node-socket
+      - /data/node.socket
+      - --node-config
+      - /config/node-config.json
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "1337"
+    networks:
+      - cardano-network
+    ports:
+      - "1337:1337"
+    depends_on:
+      - cardano-node-1
+    environment:
+      - NETWORK=local
+
+  # Kupo Indexer
+  kupo:
+    image: cardanosolutions/kupo:2.8.0
+    container_name: skillforge-kupo
+    volumes:
+      - ./data/node-1:/data
+      - ./configs:/config
+      - ./data/kupo:/kupo-db
+    command:
+      - --node-socket
+      - /data/node.socket
+      - --node-config
+      - /config/node-config.json
+      - --work-dir
+      - /kupo-db
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "1442"
+      - --since
+      - "origin"
+    networks:
+      - cardano-network
+    ports:
+      - "1442:1442"
+    depends_on:
+      - cardano-node-1
+    environment:
+      - NETWORK=local
+
+  # Local Faucet
+  faucet:
+    image: node:18-alpine
+    container_name: skillforge-faucet
+    working_dir: /app
+    volumes:
+      - ./data/node-1:/data
+      - ./configs:/config
+      - ./keys:/keys
+      - ./faucet-server.js:/app/faucet-server.js
+    command: node faucet-server.js
+    networks:
+      - cardano-network
+    ports:
+      - "8090:8090"
+    depends_on:
+      - cardano-node-1
+    environment:
+      - NODE_SOCKET=/data/node.socket
+      - CONFIG_PATH=/config/node-config.json
+      - PAYMENT_SKEY=/keys/payment.skey
+      - FAUCET_AMOUNT=5000000000
+      - PORT=8090
+
+networks:
+  cardano-network:
+    driver: bridge

@@ -1,300 +1,346 @@
-# Aiken Integration Guide
+# Aiken Smart Contract Integration Guide
 
 ## Overview
 
-SkillForge has been upgraded to use **Aiken smart contracts** instead of Plutus V2 Haskell. Aiken provides a more modern, developer-friendly syntax while compiling to the same Plutus V2 format.
+The SkillForge dApp has been upgraded from Plutus V2 Haskell to **Aiken smart contracts**. This document describes the complete integration and how to build, deploy, and use the contracts.
 
 ## Project Structure
 
 ```
 skillforge/
-├── contracts/                    # Aiken contracts
-│   ├── aiken.toml               # Aiken project config
-│   ├── validators/
-│   │   └── escrow.ak            # Escrow validator
-│   ├── minting_policies/
-│   │   └── session_nft.ak      # NFT minting policy
-│   └── build.sh                # Build script
+├── contracts/
+│   └── skillforge/
+│       ├── aiken.toml              # Aiken project configuration
+│       ├── build.sh                 # Build script
+│       ├── validators/
+│       │   └── escrow.ak           # Escrow validator contract
+│       └── minting_policies/
+│           └── session_nft.ak      # NFT minting policy
 ├── backend/
-│   ├── contracts/               # Compiled Plutus scripts (generated)
+│   ├── contracts/                  # Compiled scripts (generated)
 │   │   ├── escrow.plutus
 │   │   └── session_nft.plutus
 │   └── src/
 │       ├── services/
-│       │   └── cardano.ts       # Updated to load Aiken scripts
+│       │   ├── cardano.ts          # Script loading & Cardano utilities
+│       │   └── transactionBuilder.ts  # Transaction building with Aiken scripts
 │       └── utils/
-│           └── datumBuilder.ts  # Helper for datum/redeemer JSON
-└── scripts/                     # Local testnet scripts
-    ├── setup-local-testnet.sh
-    ├── start-local-node.sh
-    └── fund-test-address.sh
+│           ├── loadScript.ts       # Script loader utility
+│           └── datumBuilder.ts     # Datum/redeemer builders
+└── frontend/
+    └── src/
+        └── components/
+            └── AikenInfo.tsx       # UI component showing contract hashes
 ```
-
-## Building Aiken Contracts
-
-### Prerequisites
-
-Install Aiken:
-```bash
-# macOS
-brew install aiken-lang/aiken/aiken
-
-# Or download from:
-# https://github.com/aiken-lang/aiken/releases
-```
-
-### Build
-
-```bash
-cd contracts
-chmod +x build.sh
-./build.sh
-```
-
-This will:
-1. Build all Aiken contracts
-2. Export compiled `.plutus` files to `backend/contracts/`
 
 ## Contracts
 
-### Escrow Validator
+### 1. Escrow Validator (`validators/escrow.ak`)
 
-**File**: `contracts/validators/escrow.ak`
+**Purpose**: Manages ADA escrow with dual attestation and timed refunds.
 
-**Purpose**: Lock funds for mentoring sessions with dual attestation
-
-**Datum**:
-- `learner`: ByteArray (learner's public key hash)
-- `mentor`: ByteArray (mentor's public key hash)
-- `price`: Int (price in Lovelace)
-- `session`: ByteArray (session ID)
-- `learner_attested`: Bool
-- `mentor_attested`: Bool
-
-**Redeemers**:
-- `AttestByLearner`: Learner attests session completion
-- `AttestByMentor`: Mentor attests session completion
-- `ClaimFunds`: Mentor claims funds (requires both attestations)
-- `Refund`: Learner refunds after timeout
-
-### NFT Minting Policy
-
-**File**: `contracts/minting_policies/session_nft.ak`
-
-**Purpose**: Mint unique NFT for each completed session
-
-**Redeemer**:
-- `Mint { session: ByteArray }`: Mint NFT for session
-
-**Constraints**:
-- Exactly 1 token minted per transaction
-- Token name: `SkillForge-Session-{sessionId}`
-
-## Backend Integration
-
-### Loading Scripts
-
-The backend automatically loads Aiken-compiled scripts on startup:
-
-```typescript
-// backend/src/services/cardano.ts
-export function initializeScripts() {
-  // Loads escrow.plutus and session_nft.plutus
-  // Logs script hashes for verification
+**Datum Structure**:
+```aiken
+datum EscrowDatum {
+  learner : ByteArray          # Learner's public key hash
+  mentor  : ByteArray          # Mentor's public key hash
+  price   : Int                # Price in Lovelace
+  session : ByteArray          # Session ID (UUID as bytes)
+  learner_attested : Bool      # Learner attestation status
+  mentor_attested  : Bool      # Mentor attestation status
 }
 ```
 
-### Building Transactions
+**Redeemer Actions**:
+- `AttestByLearner` (index 0): Learner attests session completion
+- `AttestByMentor` (index 1): Mentor attests session completion
+- `ClaimFunds` (index 2): Mentor claims funds after both attest
+- `Refund` (index 3): Learner refunds if timeout reached
 
-Use `datumBuilder.ts` helpers to build datum and redeemer JSON:
+**Logic**:
+- Attest actions can only be called once per party
+- Claim requires both attestations and mentor signature
+- Refund available after validity interval expires
 
-```typescript
-import { buildEscrowDatum, buildEscrowRedeemer } from '../utils/datumBuilder';
+### 2. NFT Minting Policy (`minting_policies/session_nft.ak`)
 
-const datum = buildEscrowDatum({
-  learnerPubKeyHash: '...',
-  mentorPubKeyHash: '...',
-  priceLovelace: 100000000,
-  sessionId: '...'
-});
+**Purpose**: Mints exactly one NFT per completed session.
 
-const redeemer = buildEscrowRedeemer('AttestByLearner');
+**Redeemer Structure**:
+```aiken
+redeemer MintRedeemer {
+  Mint { session : ByteArray }
+}
 ```
 
-## Local Testnet Setup
+**Logic**:
+- Ensures exactly one token is minted per transaction
+- Session ID is embedded in the redeemer
 
-### Quick Start
+## Building Contracts
 
-```bash
-# 1. Setup testnet
-./scripts/setup-local-testnet.sh
+### Prerequisites
 
-# 2. Start local node
-./scripts/start-local-node.sh
-
-# 3. Fund test address
-./scripts/fund-test-address.sh <address> 1000
-
-# 4. Build contracts
-cd contracts && ./build.sh
-```
-
-### Manual Setup
-
-1. **Generate test keys**:
+1. **Install Aiken**:
    ```bash
-   cardano-cli address key-gen \
-     --verification-key-file keys/payment.vkey \
-     --signing-key-file keys/payment.skey
+   # macOS
+   brew install aiken-lang/aiken/aiken
+   
+   # Or download from: https://github.com/aiken-lang/aiken/releases
    ```
 
-2. **Create address**:
+2. **Verify installation**:
    ```bash
-   cardano-cli address build \
-     --payment-verification-key-file keys/payment.vkey \
-     --testnet-magic 42 \
-     --out-file address.txt
+   aiken --version
    ```
 
-3. **Fund address** (in local testnet, create genesis UTXO)
+### Build Process
 
-## Frontend Integration
+1. **Navigate to contracts directory**:
+   ```bash
+   cd skillforge/contracts/skillforge
+   ```
 
-### Aiken Info Component
+2. **Run build script**:
+   ```bash
+   ./build.sh
+   ```
 
-The frontend displays Aiken contract information:
+   This will:
+   - Run `aiken build` to compile contracts
+   - Copy compiled `.plutus` files to `backend/contracts/`
+   - Display script hashes
 
-- **Escrow Validator Hash**: Shows the script hash
-- **NFT Policy ID**: Shows the minting policy ID
-- **Version**: Shows Aiken version
+3. **Verify output**:
+   ```bash
+   ls -la ../../backend/contracts/*.plutus
+   ```
 
-Access via: `GET /contracts/info`
+   You should see:
+   - `escrow.plutus`
+   - `session_nft.plutus`
 
-## Deployment to Preprod
+## Backend Integration
 
-### 1. Build Contracts
+### Script Loading
 
-```bash
-cd contracts
-aiken build
-```
-
-### 2. Export Scripts
-
-```bash
-cp build/validators/escrow.plutus ../backend/contracts/
-cp build/minting_policies/session_nft.plutus ../backend/contracts/
-```
-
-### 3. Deploy to Preprod
-
-```bash
-# Set environment variables
-export CARDANO_NETWORK=preprod
-export BLOCKFROST_PROJECT_ID=your_preprod_key
-
-# Start backend
-cd backend
-npm run dev
-```
-
-### 4. Verify Scripts
-
-Check backend logs for:
-```
-✓ Aiken Escrow script loaded
-  Script hash: <hash>
-✓ Aiken NFT minting policy loaded
-  Policy ID: <policy_id>
-```
-
-## Helper Scripts
-
-### Generate Datum JSON
+Scripts are automatically loaded when the backend starts:
 
 ```typescript
-import { buildEscrowDatum } from './utils/datumBuilder';
+// backend/src/services/cardano.ts
+initializeScripts(); // Called in index.ts
+```
 
-const datum = buildEscrowDatum({
-  learnerPubKeyHash: 'abc123...',
-  mentorPubKeyHash: 'def456...',
-  priceLovelace: 100000000,
-  sessionId: 'session-uuid'
+**Script Paths** (configurable via environment variables):
+- `ESCROW_SCRIPT_PATH` (default: `backend/contracts/escrow.plutus`)
+- `NFT_POLICY_SCRIPT_PATH` (default: `backend/contracts/session_nft.plutus`)
+
+### Transaction Building
+
+The backend uses `transactionBuilder.ts` to build transactions with Aiken scripts:
+
+#### Escrow Init Transaction
+
+```typescript
+const { txHex, scriptAddress, datum } = await buildEscrowInitTx({
+  learnerAddress: string,
+  mentorAddress: string,
+  learnerPubKeyHash: string,  // Hex-encoded
+  mentorPubKeyHash: string,  // Hex-encoded
+  priceLovelace: number,
+  sessionId: string,         // UUID
+  learnerUTXOs: any[]
 });
-
-console.log(JSON.stringify(datum, null, 2));
 ```
 
-### Generate Redeemer JSON
+**Datum Encoding**:
+- Aiken records are compiled as constructor 0 with fields in order
+- Bools are encoded as constructors: `false = 0`, `true = 1`
+- ByteArrays are hex-encoded strings converted to bytes
+
+#### Escrow Attest Transaction
 
 ```typescript
-import { buildEscrowRedeemer } from './utils/datumBuilder';
-
-const redeemer = buildEscrowRedeemer('ClaimFunds');
-console.log(JSON.stringify(redeemer, null, 2));
+const { txHex } = await buildEscrowAttestTx({
+  scriptUTXO: string,        // Format: "txHash#index"
+  redeemerType: 'AttestByLearner' | 'AttestByMentor',
+  signerAddress: string,
+  signerUTXOs: any[]
+});
 ```
 
-## Troubleshooting
+**Redeemer Encoding**:
+- Enum variants use constructor indices:
+  - `AttestByLearner` = 0
+  - `AttestByMentor` = 1
+  - `ClaimFunds` = 2
+  - `Refund` = 3
 
-### Scripts Not Found
+#### NFT Mint Transaction
 
-**Error**: `⚠ Escrow script not found`
-
-**Solution**:
-```bash
-cd contracts
-./build.sh
+```typescript
+const { txHex, policyId, assetName } = await buildNFTMintTx({
+  sessionId: string,
+  learnerAddress: string,
+  learnerUTXOs: any[],
+  escrowUTXO?: string
+});
 ```
 
-### Build Fails
-
-**Error**: `aiken: command not found`
-
-**Solution**: Install Aiken:
-```bash
-brew install aiken-lang/aiken/aiken
-```
-
-### Script Hash Mismatch
-
-**Error**: Script hash doesn't match expected value
-
-**Solution**: Rebuild contracts and restart backend:
-```bash
-cd contracts && ./build.sh
-# Restart backend
-```
+**Redeemer Encoding**:
+- `Mint { session }` is constructor 0 with one field (session bytes)
 
 ## API Endpoints
 
-### GET /contracts/info
+### POST /escrow/init
 
-Returns Aiken contract information:
+Builds escrow initialization transaction.
 
+**Request**:
+```json
+{
+  "learnerAddress": "addr_test1...",
+  "mentorAddress": "addr_test1...",
+  "price": 10.5,
+  "sessionId": "uuid-here",
+  "stakeKey": "stake1..."
+}
+```
+
+**Response**:
 ```json
 {
   "success": true,
   "data": {
-    "contracts": "Aiken",
-    "version": "1.0.0",
-    "escrowValidatorHash": "abc123...",
-    "nftPolicyId": "def456..."
+    "txBody": "hex-encoded-transaction",
+    "escrowAddress": "addr_test1...",
+    "datum": { ... }
   }
 }
 ```
 
-## Migration from Plutus
+### POST /nft/mint
 
-If migrating from Plutus V2 Haskell:
+Builds NFT minting transaction.
 
-1. **Contracts**: Replace `.hs` files with `.ak` files
-2. **Build**: Use `aiken build` instead of `cabal build`
-3. **Scripts**: Same `.plutus` format (compatible)
-4. **Backend**: No changes needed (loads same format)
+**Request** (multipart/form-data):
+- `sessionId`: string
+- `eventCardImage`: File (optional PNG)
 
-## Resources
+**Response**:
+```json
+{
+  "success": true,
+  "data": {
+    "txBody": "hex-encoded-transaction",
+    "policyId": "hex-policy-id",
+    "assetName": "SkillForge-Session-{sessionId}",
+    "ipfsCid": "Qm...",
+    "imageCid": "Qm...",
+    "metadataUrl": "https://gateway.pinata.cloud/ipfs/...",
+    "imageUrl": "https://gateway.pinata.cloud/ipfs/..."
+  }
+}
+```
+
+## Frontend Integration
+
+The frontend displays contract information via the `AikenInfo` component:
+
+```tsx
+<AikenInfo 
+  escrowValidatorHash={wallet.escrowState?.scriptAddress || getEscrowValidatorHash()}
+  nftPolicyId={getNFTPolicyId()}
+/>
+```
+
+## Testing
+
+### Local Devnet
+
+1. **Start local Cardano cluster** (see `devnet/` directory):
+   ```bash
+   cd skillforge/devnet
+   docker-compose up -d
+   ```
+
+2. **Build and deploy contracts**:
+   ```bash
+   cd ../contracts/skillforge
+   ./build.sh
+   cd ../../devnet
+   ./deploy-contracts.sh
+   ```
+
+3. **Start backend** (configured for local network):
+   ```bash
+   cd ../../backend
+   NETWORK=local npm run dev
+   ```
+
+### Preprod Testnet
+
+1. **Configure environment**:
+   ```bash
+   # backend/.env
+   CARDANO_NETWORK=testnet
+   BLOCKFROST_PROJECT_ID=your_preprod_project_id
+   BLOCKFROST_BASE_URL=https://cardano-preprod.blockfrost.io/api/v0
+   ```
+
+2. **Build contracts**:
+   ```bash
+   cd contracts/skillforge
+   ./build.sh
+   ```
+
+3. **Deploy to preprod**:
+   ```bash
+   # Use cardano-cli to submit transactions
+   cardano-cli transaction submit \
+     --testnet-magic 1 \
+     --tx-file escrow-init.signed
+   ```
+
+## Troubleshooting
+
+### Script Not Found
+
+**Error**: `⚠ Escrow script not found at: ...`
+
+**Solution**:
+1. Run `./build.sh` in `contracts/skillforge/`
+2. Verify files exist: `ls -la backend/contracts/*.plutus`
+3. Check `ESCROW_SCRIPT_PATH` environment variable
+
+### Invalid Datum/Redeemer
+
+**Error**: Transaction fails with "Invalid datum" or "Invalid redeemer"
+
+**Solution**:
+1. Verify datum structure matches Aiken record order
+2. Check redeemer constructor indices match enum order
+3. Ensure ByteArrays are correctly hex-encoded
+
+### Transaction Building Fails
+
+**Error**: `TransactionBuilder.new()` throws error
+
+**Solution**:
+1. Check protocol parameters are correctly formatted
+2. Verify UTXO format matches expected structure
+3. Ensure sufficient funds for fees and min UTXO
+
+## Next Steps
+
+1. **Complete Protocol Parameters Integration**: Convert Blockfrost/Ogmios protocol parameters to CSL format
+2. **Add UTXO Selection Algorithm**: Implement proper UTXO selection for optimal fee calculation
+3. **Add Collateral Handling**: Implement collateral UTXO selection for Plutus transactions
+4. **Add Transaction Validation**: Validate transactions before submission
+5. **Add Error Recovery**: Implement retry logic for failed transactions
+
+## References
 
 - [Aiken Documentation](https://aiken-lang.org/)
-- [Aiken GitHub](https://github.com/aiken-lang/aiken)
 - [Cardano Serialization Library](https://github.com/Emurgo/cardano-serialization-lib)
-
+- [Plutus Data Formats](https://plutus.readthedocs.io/en/latest/plutus/how-to-write-plutus-apps/Plutus-transactions.html)

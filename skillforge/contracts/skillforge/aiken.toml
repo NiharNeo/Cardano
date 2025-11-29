@@ -1,0 +1,21 @@
+[package]
+name = "skillforge"
+version = "1.0.0"
+description = "SkillForge Cardano smart contracts in Aiken"
+repository = "https://github.com/skillforge/contracts"
+
+[compiler]
+name = "aiken"
+version = ">= 1.0.0"
+
+[build]
+platform = "native"
+
+[validators]
+escrow = "validators/escrow.ak"
+
+[minting_policies]
+session_nft = "minting_policies/session_nft.ak"
+
+
+

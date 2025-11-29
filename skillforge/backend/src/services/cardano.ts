@@ -3,19 +3,35 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { getUTXOs as getOgmiosUTXOs, getProtocolParameters as getOgmiosProtocolParameters } from './ogmios';
+import { getUTXOs as getKupoUTXOs } from './kupo';
 
 dotenv.config();
 
+const NETWORK_MODE = process.env.NETWORK || 'preprod';
 const BLOCKFROST_PROJECT_ID = process.env.BLOCKFROST_PROJECT_ID;
-const BLOCKFROST_BASE_URL = process.env.BLOCKFROST_BASE_URL || 'https://cardano-testnet.blockfrost.io/api/v0';
-const NETWORK = process.env.CARDANO_NETWORK === 'mainnet' ? 1 : 0; // 0 = testnet, 1 = mainnet
+// Default to Preprod testnet Blockfrost endpoint
+const BLOCKFROST_BASE_URL = process.env.BLOCKFROST_BASE_URL || 'https://cardano-preprod.blockfrost.io/api/v0';
+const NETWORK = NETWORK_MODE === 'local' ? 0 : (process.env.CARDANO_NETWORK === 'mainnet' ? 1 : 0); // 0 = testnet/local, 1 = mainnet
+const USE_LOCAL = NETWORK_MODE === 'local';
+
+// Controlled Stake Key Configuration
+// Bech32: stake_test1upxprdlg2aaflnfzckjn5lxlgmnw4x7act84q3t4qqd9lzqjtjam3
+// HEX: e04c11b7e8577a9fcd22c5a53a7cdf46e6ea9bddc2cf504575001a5f88
+export const CONTROLLED_STAKE_KEY_BECH32 = process.env.CONTROLLED_STAKE_KEY || 'stake_test1upxprdlg2aaflnfzckjn5lxlgmnw4x7act84q3t4qqd9lzqjtjam3';
+export const CONTROLLED_STAKE_KEY_HEX = process.env.CONTROLLED_STAKE_KEY_HEX || 'e04c11b7e8577a9fcd22c5a53a7cdf46e6ea9bddc2cf504575001a5f88';
+
+// Account State Key Configuration
+// Same stake key used for account state management
+export const ACCOUNT_STATE_KEY_BECH32 = process.env.ACCOUNT_STATE_KEY || 'stake_test1upxprdlg2aaflnfzckjn5lxlgmnw4x7act84q3t4qqd9lzqjtjam3';
+export const ACCOUNT_STATE_KEY_HEX = process.env.ACCOUNT_STATE_KEY_HEX || 'e04c11b7e8577a9fcd22c5a53a7cdf46e6ea9bddc2cf504575001a5f88';
 
 // Load Aiken scripts (compiled to Plutus format)
 const ESCROW_SCRIPT_PATH = process.env.ESCROW_SCRIPT_PATH || path.join(__dirname, '../contracts/escrow.plutus');
 const NFT_POLICY_SCRIPT_PATH = process.env.NFT_POLICY_SCRIPT_PATH || path.join(__dirname, '../contracts/session_nft.plutus');
 
 let escrowScript: Cardano.PlutusScript | null = null;
-let nftPolicyScript: Cardano.MintingPolicy | null = null;
+let nftPolicyScript: Cardano.PlutusScript | null = null; // Aiken compiles minting policies as PlutusScript
 
 // Helper to load Aiken-compiled scripts
 export const loadScript = (scriptPath: string): any => {
@@ -54,24 +70,30 @@ export function initializeScripts() {
     if (fs.existsSync(NFT_POLICY_SCRIPT_PATH)) {
       const nftData = loadScript(NFT_POLICY_SCRIPT_PATH);
       const scriptBytes = Buffer.from(nftData.cborHex, 'hex');
-      nftPolicyScript = Cardano.MintingPolicy.from_bytes(scriptBytes);
+      nftPolicyScript = Cardano.PlutusScript.from_bytes(scriptBytes); // Aiken compiles as PlutusScript
       const policyHash = nftPolicyScript.hash();
       console.log('✓ Aiken NFT minting policy loaded');
       console.log(`  Policy ID: ${Buffer.from(policyHash.to_bytes()).toString('hex')}`);
     } else {
       console.warn('⚠ NFT policy script not found at:', NFT_POLICY_SCRIPT_PATH);
-      console.warn('  Run: cd contracts && ./build.sh');
+      console.warn('  Run: cd contracts/skillforge && ./build.sh');
     }
   } catch (error) {
     console.error('Error loading Aiken scripts:', error);
   }
 }
 
-// Get protocol parameters from Blockfrost
+// Get protocol parameters from Ogmios (local) or Blockfrost (preprod/mainnet)
 export async function getProtocolParameters(): Promise<any> {
   try {
+    if (USE_LOCAL) {
+      console.log('[Cardano] Using Ogmios for protocol parameters (local devnet)');
+      return await getOgmiosProtocolParameters();
+    }
+
     if (!BLOCKFROST_PROJECT_ID) {
       // Return default parameters if Blockfrost not configured
+      console.log('[Cardano] Using default protocol parameters');
       return {
         min_fee_a: '44',
         min_fee_b: '155381',
@@ -82,6 +104,7 @@ export async function getProtocolParameters(): Promise<any> {
       };
     }
 
+    console.log('[Cardano] Using Blockfrost for protocol parameters');
     const response = await axios.get(`${BLOCKFROST_BASE_URL}/epochs/latest/parameters`, {
       headers: {
         project_id: BLOCKFROST_PROJECT_ID
@@ -89,8 +112,8 @@ export async function getProtocolParameters(): Promise<any> {
     });
     return response.data;
   } catch (error) {
-    console.error('Error fetching protocol parameters:', error);
-    // Return default parameters if Blockfrost fails
+    console.error('[Cardano] Error fetching protocol parameters:', error);
+    // Return default parameters if fetch fails
     return {
       min_fee_a: '44',
       min_fee_b: '155381',
@@ -102,13 +125,27 @@ export async function getProtocolParameters(): Promise<any> {
   }
 }
 
-// Get UTXOs for an address
+// Get UTXOs for an address via Kupo (local) or Blockfrost (preprod/mainnet)
 export async function getUTXOs(address: string): Promise<any[]> {
   try {
+    if (USE_LOCAL) {
+      console.log('[Cardano] Using Kupo for UTXOs (local devnet):', address);
+      // Try Kupo first, fallback to Ogmios
+      const kupoUTXOs = await getKupoUTXOs(address);
+      if (kupoUTXOs.length > 0) {
+        return kupoUTXOs;
+      }
+      // Fallback to Ogmios
+      console.log('[Cardano] Kupo returned no UTXOs, trying Ogmios...');
+      return await getOgmiosUTXOs(address);
+    }
+
     if (!BLOCKFROST_PROJECT_ID) {
+      console.warn('[Cardano] No Blockfrost configured, returning empty UTXOs');
       return [];
     }
 
+    console.log('[Cardano] Using Blockfrost for UTXOs:', address);
     const response = await axios.get(`${BLOCKFROST_BASE_URL}/addresses/${address}/utxos`, {
       headers: {
         project_id: BLOCKFROST_PROJECT_ID
@@ -116,7 +153,7 @@ export async function getUTXOs(address: string): Promise<any[]> {
     });
     return response.data;
   } catch (error) {
-    console.error('Error fetching UTXOs:', error);
+    console.error('[Cardano] Error fetching UTXOs:', error);
     return [];
   }
 }
@@ -201,5 +238,75 @@ export function getNFTPolicyId(): string | null {
   if (!nftPolicyScript) {
     return null;
   }
+  // For minting policies, the hash is the policy ID
   return Buffer.from(nftPolicyScript.hash().to_bytes()).toString('hex');
+}
+
+// Get controlled stake key information
+export function getControlledStakeKey(): { bech32: string; hex: string } {
+  return {
+    bech32: CONTROLLED_STAKE_KEY_BECH32,
+    hex: CONTROLLED_STAKE_KEY_HEX
+  };
+}
+
+// Get account state key information
+export function getAccountStateKey(): { bech32: string; hex: string } {
+  return {
+    bech32: ACCOUNT_STATE_KEY_BECH32,
+    hex: ACCOUNT_STATE_KEY_HEX
+  };
+}
+
+// Transaction hash for tracking (example transaction)
+export const TRACKED_TX_HASH = process.env.TRACKED_TX_HASH || '103fead5c7e852a1544c4fc1dbc869fabd9364b512f84493b8116f6a0d6ca5a8';
+
+/**
+ * Check transaction status via Blockfrost
+ * @param txHash Transaction hash to check
+ * @returns Transaction status information
+ */
+export async function getTransactionStatus(txHash: string): Promise<{
+  confirmed: boolean;
+  block?: string;
+  blockHeight?: number;
+  slot?: number;
+  error?: string;
+}> {
+  if (!BLOCKFROST_PROJECT_ID) {
+    return {
+      confirmed: false,
+      error: 'Blockfrost not configured'
+    };
+  }
+
+  try {
+    const response = await axios.get(`${BLOCKFROST_BASE_URL}/txs/${txHash}`, {
+      headers: {
+        project_id: BLOCKFROST_PROJECT_ID
+      }
+    });
+
+    const txData = response.data;
+    
+    return {
+      confirmed: !!txData.block,
+      block: txData.block || undefined,
+      blockHeight: txData.block_height || undefined,
+      slot: txData.slot || undefined
+    };
+  } catch (error: any) {
+    if (error.response?.status === 404) {
+      return {
+        confirmed: false,
+        error: 'Transaction not found'
+      };
+    }
+    
+    console.error('[Cardano] Error checking transaction status:', error);
+    return {
+      confirmed: false,
+      error: error.message || 'Failed to check transaction status'
+    };
+  }
 }

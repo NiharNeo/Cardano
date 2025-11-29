@@ -2,20 +2,21 @@ import React, { useState } from 'react';
 import { useWallet, WalletName } from '../contexts/WalletContext';
 
 export const WalletConnector: React.FC = () => {
-  const { 
-    wallet, 
-    walletName, 
-    address, 
+  const {
+    walletName,
+    address,
     addresses,
     stakeKey,
-    balance, 
-    isConnected, 
-    isConnecting, 
+    balance,
+    isConnected,
+    isConnecting,
     availableWallets,
-    connect, 
-    disconnect 
+    walletNetworkId,
+    isPreprodNetwork,
+    connect,
+    disconnect
   } = useWallet();
-  
+
   const [error, setError] = useState<string | null>(null);
 
   // Get available wallet names
@@ -26,7 +27,7 @@ export const WalletConnector: React.FC = () => {
 
   const handleConnect = async (name: WalletName) => {
     if (!name) return;
-    
+
     setError(null);
     try {
       await connect(name);
@@ -62,7 +63,41 @@ export const WalletConnector: React.FC = () => {
             <span className="chip-dot" style={{ backgroundColor: '#10b981' }} />
             {walletName?.toUpperCase() || 'WALLET'}
           </div>
-          
+
+          {/* Network Warning */}
+          {!isPreprodNetwork && walletNetworkId !== null && (
+            <div className="error-message animate-fade-in" style={{ marginTop: '0.75rem', marginBottom: '0.75rem' }}>
+              <span className="error-icon">⚠</span>
+              <span className="error-text">
+                Your wallet is on a different network. SkillForge requires PREPROD testnet.
+              </span>
+              <div style={{ marginTop: '0.5rem' }}>
+                <button
+                  className="btn btn-sm btn-ghost"
+                  onClick={async () => {
+                    await handleDisconnect();
+                    setTimeout(() => {
+                      handleConnect(walletName);
+                    }, 500);
+                  }}
+                  style={{ fontSize: '0.75rem' }}
+                >
+                  Reconnect
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Connection Issues Warning */}
+          {(!balance || balance === '0') && isConnected && (
+            <div className="error-message animate-fade-in" style={{ marginTop: '0.75rem', marginBottom: '0.75rem', backgroundColor: 'rgba(255, 193, 7, 0.1)' }}>
+              <span className="error-icon">ℹ</span>
+              <span className="error-text" style={{ fontSize: '0.75rem' }}>
+                Balance not showing? Try disconnecting and reconnecting, or switch to a different wallet.
+              </span>
+            </div>
+          )}
+
           <div className="wallet-details" style={{ marginTop: '0.75rem' }}>
             {/* Payment Address */}
             <div className="wallet-address-row">
@@ -71,7 +106,7 @@ export const WalletConnector: React.FC = () => {
                 {truncateAddress(paymentAddress)}
               </span>
             </div>
-            
+
             {/* Stake Address */}
             {stakeAddress && (
               <div className="wallet-address-row" style={{ marginTop: '0.5rem' }}>
@@ -81,7 +116,7 @@ export const WalletConnector: React.FC = () => {
                 </span>
               </div>
             )}
-            
+
             {/* Balance */}
             {balance && (
               <div className="wallet-balance text-xs text-accent" style={{ marginTop: '0.5rem', fontWeight: '600' }}>
@@ -90,14 +125,35 @@ export const WalletConnector: React.FC = () => {
             )}
           </div>
         </div>
-        <button 
-          className="btn btn-ghost" 
-          onClick={handleDisconnect} 
-          disabled={isConnecting}
-          style={{ marginLeft: 'auto' }}
-        >
-          Disconnect
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginLeft: 'auto' }}>
+          {/* Show switch wallet option if other wallets available */}
+          {availableWalletNames.length > 1 && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={async () => {
+                await handleDisconnect();
+                // Auto-connect to a different wallet if available
+                const otherWallets = availableWalletNames.filter(n => n !== walletName);
+                if (otherWallets.length > 0) {
+                  setTimeout(() => {
+                    handleConnect(otherWallets[0]);
+                  }, 500);
+                }
+              }}
+              disabled={isConnecting}
+              style={{ fontSize: '0.75rem' }}
+            >
+              Switch Wallet
+            </button>
+          )}
+          <button
+            className="btn btn-ghost"
+            onClick={handleDisconnect}
+            disabled={isConnecting}
+          >
+            Disconnect
+          </button>
+        </div>
       </div>
     );
   }
@@ -154,9 +210,14 @@ export const WalletConnector: React.FC = () => {
               onClick={() => handleConnect(name)}
               disabled={isConnecting}
             >
-              {isConnecting ? 'Connecting...' : `Connect ${name.charAt(0).toUpperCase() + name.slice(1)}`}
+              {isConnecting && walletName === name ? 'Connecting...' : `Connect ${name?.charAt(0).toUpperCase() + name.slice(1)}`}
             </button>
           ))}
+          <div style={{ marginTop: '0.5rem', padding: '0.75rem', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+            <p className="small-muted" style={{ margin: 0, fontSize: '0.75rem' }}>
+              💡 <strong>Tip:</strong> Make sure your wallet is set to <strong>Preprod Testnet</strong> before connecting.
+            </p>
+          </div>
         </div>
       )}
     </div>

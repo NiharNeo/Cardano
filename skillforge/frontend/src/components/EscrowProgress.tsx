@@ -1,13 +1,29 @@
 import React from 'react';
+import { useWallet } from '../contexts/WalletContext';
 
 export type EscrowStep = 'idle' | 'fundsLocked' | 'sessionActive' | 'nftMinted';
 
 interface EscrowProgressProps {
   currentStep: EscrowStep;
   txId?: string | null;
+  learnerAttested?: boolean;
+  providerAttested?: boolean;
+  onAttest?: (isLearner: boolean) => void;
+  isAttesting?: boolean;
+  isWalletConnected?: boolean;
 }
 
-export const EscrowProgress: React.FC<EscrowProgressProps> = ({ currentStep, txId }) => {
+export const EscrowProgress: React.FC<EscrowProgressProps> = ({ 
+  currentStep, 
+  txId,
+  learnerAttested = false,
+  providerAttested = false,
+  onAttest,
+  isAttesting = false,
+  isWalletConnected = false
+}) => {
+  const wallet = useWallet();
+  const { lockState, resetEscrow } = wallet;
   const steps: Array<{ key: EscrowStep; label: string; description: string }> = [
     {
       key: 'fundsLocked',
@@ -77,6 +93,43 @@ export const EscrowProgress: React.FC<EscrowProgressProps> = ({ currentStep, txI
           <span className="text-xs text-subtle">
             Waiting for you to choose a mentor from the matches.
           </span>
+        </div>
+      )}
+      
+      {/* Show lock state status */}
+      {lockState && lockState.status !== 'idle' && (
+        <div className="escrow-lock-status mt-3">
+          <div className="text-xs text-subtle">
+            Status: {lockState.status}
+            {lockState.error && (
+              <span className="text-red-500 ml-2">Error: {lockState.error}</span>
+            )}
+            {lockState.txHash && (
+              <span className="mono ml-2">TX: {lockState.txHash.slice(0, 8)}...</span>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Attestation buttons - only show after funds are locked */}
+      {currentStep === 'fundsLocked' && onAttest && (
+        <div className="escrow-attestation mt-4">
+          <div className="flex gap-2">
+            <button
+              className="btn btn-sm"
+              disabled={learnerAttested || isAttesting || !isWalletConnected}
+              onClick={() => onAttest(true)}
+            >
+              {learnerAttested ? '✓ Learner Attested' : 'Attest as Learner'}
+            </button>
+            <button
+              className="btn btn-sm"
+              disabled={providerAttested || isAttesting || !isWalletConnected}
+              onClick={() => onAttest(false)}
+            >
+              {providerAttested ? '✓ Provider Attested' : 'Attest as Provider'}
+            </button>
+          </div>
         </div>
       )}
     </div>
