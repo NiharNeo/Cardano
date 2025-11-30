@@ -608,7 +608,9 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const signTx = useCallback(async (txCborHex: string): Promise<string> => {
         if (!wallet?.api) throw new Error('Wallet not connected');
-        return await wallet.api.signTx(txCborHex, true);
+        // CIP-30: signTx returns witness set CBOR, not a signed transaction
+        // Use partialSign=false for regular transactions
+        return await wallet.api.signTx(txCborHex, false);
     }, [wallet]);
 
     const submitTx = useCallback(async (signedTxCborHex: string): Promise<string> => {
@@ -726,12 +728,33 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
             // 2. Sign the transaction with wallet
             console.log('[Wallet] Requesting signature from wallet...');
-            const signedTxHex = await signTx(txHex);
-            console.log('[Wallet] Transaction signed');
+            console.log('[Wallet] Transaction hex length:', txHex.length);
+            
+            // CIP-30: signTx returns a witness set CBOR, not a signed transaction
+            const witnessSetHex = await wallet.api.signTx(txHex, false);
+            console.log('[Wallet] Received witness set from wallet');
+            
+            // 3. Assemble the final signed transaction
+            // Parse the original transaction and witness set
+            const txBytes = Buffer.from(txHex, 'hex');
+            const witnessSetBytes = Buffer.from(witnessSetHex, 'hex');
+            
+            const transaction = CardanoWasm.Transaction.from_bytes(txBytes);
+            const witnessSet = CardanoWasm.TransactionWitnessSet.from_bytes(witnessSetBytes);
+            
+            // Create the final signed transaction
+            const signedTx = CardanoWasm.Transaction.new(
+                transaction.body(),
+                witnessSet,
+                transaction.auxiliary_data()
+            );
+            
+            const signedTxHex = Buffer.from(signedTx.to_bytes()).toString('hex');
+            console.log('[Wallet] Assembled signed transaction, length:', signedTxHex.length);
 
             setLockState({ status: 'submitting', error: null, txHash: null });
 
-            // 3. Submit the signed transaction
+            // 4. Submit the signed transaction
             console.log('[Wallet] Submitting transaction to blockchain...');
             const txHash = await submitTx(signedTxHex);
             console.log('[Wallet] Transaction submitted:', txHash);

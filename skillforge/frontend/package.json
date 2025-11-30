@@ -13,6 +13,7 @@
     "@meshsdk/core": "^1.9.0-beta.87",
     "@meshsdk/react": "^1.9.0-beta.87",
     "buffer": "^6.0.3",
+    "lucid-cardano": "^0.10.11",
     "lucide-react": "^0.555.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

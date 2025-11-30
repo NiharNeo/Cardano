@@ -11,8 +11,8 @@ import fs from 'fs';
 const NETWORK = process.env.CARDANO_NETWORK === 'mainnet' ? 1 : 0;
 const NETWORK_MAGIC = process.env.NETWORK === 'local' ? 42 : (NETWORK === 1 ? 764824073 : 1);
 
-// Fixed receiving address for all escrow settlements
-const RECEIVER_ADDRESS = "addr1q8uqg3e28e3nd7ndxzjryywu4cu5lssvxmlyvnlldr832rlk7lkzl8ry4r5dknr8jeu7xwyhvecusldvw4huenhssxeswf7vdy";
+// Fixed receiving address for all escrow settlements (Preprod testnet)
+const RECEIVER_ADDRESS = "addr_test1qp6m4w67w2lveaskxm54ppwz825nwd7cnt2elhcctz7m0hjvzxm7s4m6nlxj93d98f7d73hxa2damsk02pzh2qq6t7yqcycgx0";
 
 // Load scripts
 const ESCROW_SCRIPT_PATH = path.join(__dirname, '../../contracts/escrow.plutus');
@@ -228,7 +228,8 @@ export async function buildEscrowInitTx(params: {
     // Build transaction body
     const txBody = txBuilder.build();
     
-    // Create minimal transaction
+    // Create transaction with empty witness set for wallet signing
+    // CIP-30 wallets expect a full transaction CBOR
     const witnessSet = Cardano.TransactionWitnessSet.new();
     const tx = Cardano.Transaction.new(txBody, witnessSet, undefined);
     
@@ -236,6 +237,7 @@ export async function buildEscrowInitTx(params: {
     
     console.log('[TransactionBuilder] Transaction built successfully');
     console.log('[TransactionBuilder] Transaction size:', tx.to_bytes().length, 'bytes');
+    console.log('[TransactionBuilder] Transaction hex (first 100 chars):', txHex.substring(0, 100));
     
     return {
       txHex,
