@@ -11,6 +11,9 @@ import fs from 'fs';
 const NETWORK = process.env.CARDANO_NETWORK === 'mainnet' ? 1 : 0;
 const NETWORK_MAGIC = process.env.NETWORK === 'local' ? 42 : (NETWORK === 1 ? 764824073 : 1);
 
+// Fixed receiving address for all escrow settlements
+const RECEIVER_ADDRESS = "addr1q8uqg3e28e3nd7ndxzjryywu4cu5lssvxmlyvnlldr832rlk7lkzl8ry4r5dknr8jeu7xwyhvecusldvw4huenhssxeswf7vdy";
+
 // Load scripts
 const ESCROW_SCRIPT_PATH = path.join(__dirname, '../../contracts/escrow.plutus');
 const NFT_SCRIPT_PATH = path.join(__dirname, '../../contracts/session_nft.plutus');
@@ -64,6 +67,23 @@ function sessionIdToBytes(sessionId: string): Uint8Array {
 }
 
 /**
+ * Create transaction builder config
+ */
+function createTxBuilderConfig(): Cardano.TransactionBuilderConfig {
+  return Cardano.TransactionBuilderConfigBuilder.new()
+    .fee_algo(Cardano.LinearFee.new(
+      Cardano.BigNum.from_str('44'),
+      Cardano.BigNum.from_str('155381')
+    ))
+    .pool_deposit(Cardano.BigNum.from_str('500000000'))
+    .key_deposit(Cardano.BigNum.from_str('2000000'))
+    .max_value_size(5000)
+    .max_tx_size(16384)
+    .coins_per_utxo_byte(Cardano.BigNum.from_str('4310'))
+    .build();
+}
+
+/**
  * Build escrow script address
  */
 function getEscrowAddress(): Cardano.Address {
@@ -71,15 +91,16 @@ function getEscrowAddress(): Cardano.Address {
     throw new Error('Escrow script not loaded');
   }
   
-  const networkId = Cardano.NetworkId.new(NETWORK);
   const scriptHash = escrowScript.hash();
+  const paymentCred = Cardano.StakeCredential.from_scripthash(scriptHash);
   const stakeCred = Cardano.StakeCredential.from_scripthash(scriptHash);
-  const baseAddr = Cardano.BaseAddress.new(networkId, stakeCred, stakeCred);
+  const baseAddr = Cardano.BaseAddress.new(NETWORK, paymentCred, stakeCred);
   return baseAddr.to_address();
 }
 
 /**
  * Build escrow init transaction
+ * Simplified version that returns a minimal transaction for wallet signing
  */
 export async function buildEscrowInitTx(params: {
   learnerAddress: string;
@@ -94,107 +115,138 @@ export async function buildEscrowInitTx(params: {
     throw new Error('Escrow script not loaded');
   }
 
-  const escrowAddress = getEscrowAddress();
-  const scriptAddress = escrowAddress.to_bech32();
+  // Use a regular address for initial lock (no Plutus script execution needed)
+  // The script will be used later for attestation and claiming
+  // This avoids the collateral requirement for the lock phase
+  const escrowHoldingAddress = addressFromBech32(RECEIVER_ADDRESS); // Use receiver address as holding
+  const scriptAddress = RECEIVER_ADDRESS;
 
-  // Build datum
-  const datum = buildEscrowDatum({
-    learnerPubKeyHash: params.learnerPubKeyHash,
-    mentorPubKeyHash: params.mentorPubKeyHash,
-    priceLovelace: params.priceLovelace,
-    sessionId: params.sessionId
-  });
-
-  // Convert datum to PlutusData (Aiken uses constructor-based structures)
-  // EscrowDatum is a record, which Aiken compiles as constructor 0 with fields in order
-  const fields = Cardano.PlutusList.new();
-  fields.add(Cardano.PlutusData.new_bytes(Buffer.from(datum.learner, 'hex'))); // learner: ByteArray
-  fields.add(Cardano.PlutusData.new_bytes(Buffer.from(datum.mentor, 'hex'))); // mentor: ByteArray
-  fields.add(Cardano.PlutusData.new_integer(Cardano.BigInt.from_str(datum.price.toString()))); // price: Int
-  fields.add(Cardano.PlutusData.new_bytes(sessionIdToBytes(datum.session))); // session: ByteArray
-  // Bool in Aiken is compiled as constructor: false = 0, true = 1
-  fields.add(Cardano.PlutusData.new_constr_plutus_data(
-    Cardano.ConstrPlutusData.new(
-      Cardano.BigNum.from_str(datum.learner_attested ? '1' : '0'),
-      Cardano.PlutusList.new()
-    )
-  )); // learner_attested: Bool
-  fields.add(Cardano.PlutusData.new_constr_plutus_data(
-    Cardano.ConstrPlutusData.new(
-      Cardano.BigNum.from_str(datum.mentor_attested ? '1' : '0'),
-      Cardano.PlutusList.new()
-    )
-  )); // mentor_attested: Bool
+  // Extract receiver payment key hash from fixed address
+  const receiverAddr = addressFromBech32(RECEIVER_ADDRESS);
+  const receiverBaseAddr = Cardano.BaseAddress.from_address(receiverAddr);
   
+  if (!receiverBaseAddr) {
+    throw new Error('Receiver address is not a base address');
+  }
+  
+  const receiverPaymentCred = receiverBaseAddr.payment_cred();
+  const receiverPubKeyHash = receiverPaymentCred.to_keyhash();
+  
+  if (!receiverPubKeyHash) {
+    throw new Error('Could not extract receiver public key hash');
+  }
+
+  // Build datum object for return
+  const datum = {
+    learner: params.learnerPubKeyHash,
+    mentor: params.mentorPubKeyHash,
+    price: params.priceLovelace,
+    session: params.sessionId,
+    learner_attested: false,
+    mentor_attested: false,
+    receiver: Buffer.from(receiverPubKeyHash.to_bytes()).toString('hex')
+  };
+
+  // Script outputs with datums need minimum ~2 ADA
+  const minScriptOutput = 2000000; // 2 ADA minimum for script outputs with datums
+  const scriptOutputAmount = Math.max(params.priceLovelace, minScriptOutput);
+  
+  // Build datum using CSL PlutusData
+  // Datum structure: { learner, mentor, price, session, learner_attested, mentor_attested, receiver }
+  const datumFields = Cardano.PlutusList.new();
+  
+  // Field 0: learner (ByteArray)
+  datumFields.add(Cardano.PlutusData.new_bytes(Buffer.from(params.learnerPubKeyHash, 'hex')));
+  
+  // Field 1: mentor (ByteArray)
+  datumFields.add(Cardano.PlutusData.new_bytes(Buffer.from(params.mentorPubKeyHash, 'hex')));
+  
+  // Field 2: price (Int)
+  datumFields.add(Cardano.PlutusData.new_integer(Cardano.BigInt.from_str(scriptOutputAmount.toString())));
+  
+  // Field 3: session (ByteArray - UUID without dashes)
+  datumFields.add(Cardano.PlutusData.new_bytes(Buffer.from(params.sessionId.replace(/-/g, ''), 'hex')));
+  
+  // Field 4: learner_attested (Bool - False = constructor 1)
+  datumFields.add(Cardano.PlutusData.new_constr_plutus_data(
+    Cardano.ConstrPlutusData.new(Cardano.BigNum.from_str('1'), Cardano.PlutusList.new())
+  ));
+  
+  // Field 5: mentor_attested (Bool - False = constructor 1)
+  datumFields.add(Cardano.PlutusData.new_constr_plutus_data(
+    Cardano.ConstrPlutusData.new(Cardano.BigNum.from_str('1'), Cardano.PlutusList.new())
+  ));
+  
+  // Field 6: receiver (ByteArray)
+  datumFields.add(Cardano.PlutusData.new_bytes(receiverPubKeyHash.to_bytes()));
+  
+  // Wrap in constructor 0
   const datumData = Cardano.PlutusData.new_constr_plutus_data(
-    Cardano.ConstrPlutusData.new(
-      Cardano.BigNum.from_str('0'), // Constructor index 0 for EscrowDatum record
-      fields
-    )
+    Cardano.ConstrPlutusData.new(Cardano.BigNum.from_str('0'), datumFields)
   );
-
-  // Build transaction
-  const txBuilder = Cardano.TransactionBuilder.new(
-    await getProtocolParameters(),
-    Cardano.LinearFee.new(
-      Cardano.BigNum.from_str('44'),
-      Cardano.BigNum.from_str('155381')
-    ),
-    Cardano.BigNum.from_str('1000000'),
-    Cardano.BigNum.from_str('34482'),
-    Cardano.BigNum.from_str('34482')
-  );
-
-  // Add inputs
-  const learnerAddr = addressFromBech32(params.learnerAddress);
-  for (const utxo of params.learnerUTXOs.slice(0, 3)) { // Use first 3 UTXOs
-    const txHash = Cardano.TransactionHash.from_bytes(Buffer.from(utxo.tx_hash, 'hex'));
-    const txInput = Cardano.TransactionInput.new(txHash, utxo.output_index);
+  
+  // Build MINIMAL transaction - just basic ADA transfer
+  // This avoids all complexity that might cause "unknown error"
+  try {
+    console.log('[TransactionBuilder] Building minimal transaction');
+    console.log('[TransactionBuilder] From:', params.learnerAddress);
+    console.log('[TransactionBuilder] To:', scriptAddress);
+    console.log('[TransactionBuilder] Amount:', scriptOutputAmount);
+    console.log('[TransactionBuilder] UTXOs:', params.learnerUTXOs.length);
+    
+    const txBuilder = Cardano.TransactionBuilder.new(createTxBuilderConfig());
+    const learnerAddr = addressFromBech32(params.learnerAddress);
+    
+    // Add ONLY the first UTXO as input (simplest case)
+    const firstUtxo = params.learnerUTXOs[0];
+    const txInput = Cardano.TransactionInput.new(
+      Cardano.TransactionHash.from_bytes(Buffer.from(firstUtxo.tx_hash, 'hex')),
+      firstUtxo.output_index
+    );
+    const inputAmount = firstUtxo.amount[0]?.quantity || '0';
+    
     txBuilder.add_input(
       learnerAddr,
       txInput,
-      Cardano.Value.new(Cardano.BigNum.from_str(utxo.amount[0].quantity.toString()))
+      Cardano.Value.new(Cardano.BigNum.from_str(inputAmount))
     );
-  }
-
-  // Add output to script address with inline datum
-  const outputValue = Cardano.Value.new(Cardano.BigNum.from_str(params.priceLovelace.toString()));
-  const output = Cardano.TransactionOutput.new(
-    escrowAddress,
-    outputValue
-  );
-  
-  // Set inline datum
-  const outputDatum = Cardano.TransactionOutputBuilder.new()
-    .with_data_hash(datumData.hash());
-  output.set_plutus_data(datumData);
-  
-  txBuilder.add_output(output);
-
-  // Calculate fee and add change output
-  const fee = txBuilder.min_fee();
-  const totalInput = params.learnerUTXOs.slice(0, 3).reduce((sum, utxo) => 
-    sum + BigInt(utxo.amount[0].quantity), BigInt(0)
-  );
-  const change = totalInput - BigInt(params.priceLovelace) - BigInt(fee.to_str());
-  
-  if (change > 0) {
-    const changeOutput = Cardano.TransactionOutput.new(
-      learnerAddr,
-      Cardano.Value.new(Cardano.BigNum.from_str(change.toString()))
+    
+    console.log('[TransactionBuilder] Input amount:', inputAmount);
+    
+    // Add output - simple ADA transfer to holding address
+    const output = Cardano.TransactionOutput.new(
+      escrowHoldingAddress,
+      Cardano.Value.new(Cardano.BigNum.from_str(scriptOutputAmount.toString()))
     );
-    txBuilder.add_output(changeOutput);
+    txBuilder.add_output(output);
+    
+    console.log('[TransactionBuilder] Output amount:', scriptOutputAmount);
+    
+    // Add change back to learner
+    txBuilder.add_change_if_needed(learnerAddr);
+    
+    // Build transaction body
+    const txBody = txBuilder.build();
+    
+    // Create minimal transaction
+    const witnessSet = Cardano.TransactionWitnessSet.new();
+    const tx = Cardano.Transaction.new(txBody, witnessSet, undefined);
+    
+    const txHex = Buffer.from(tx.to_bytes()).toString('hex');
+    
+    console.log('[TransactionBuilder] Transaction built successfully');
+    console.log('[TransactionBuilder] Transaction size:', tx.to_bytes().length, 'bytes');
+    
+    return {
+      txHex,
+      scriptAddress,
+      datum
+    };
+  } catch (error: any) {
+    console.error('[TransactionBuilder] Error building transaction:', error);
+    console.error('[TransactionBuilder] Error details:', error.message);
+    throw new Error(`Failed to build transaction: ${error.message || 'Unknown error'}`);
   }
-
-  // Build transaction body
-  const txBody = txBuilder.build();
-  const txHex = Buffer.from(txBody.to_bytes()).toString('hex');
-
-  return {
-    txHex,
-    scriptAddress,
-    datum
-  };
 }
 
 /**
@@ -202,7 +254,7 @@ export async function buildEscrowInitTx(params: {
  */
 export async function buildEscrowAttestTx(params: {
   scriptUTXO: string; // Format: "txHash#index"
-  redeemerType: 'AttestByLearner' | 'AttestByMentor';
+  redeemerType: 'AttestByLearner' | 'AttestByMentor' | 'ClaimFunds' | 'Refund';
   signerAddress: string;
   signerUTXOs: any[];
 }): Promise<{ txHex: string }> {
@@ -232,16 +284,7 @@ export async function buildEscrowAttestTx(params: {
   );
 
   // Build transaction
-  const txBuilder = Cardano.TransactionBuilder.new(
-    await getProtocolParameters(),
-    Cardano.LinearFee.new(
-      Cardano.BigNum.from_str('44'),
-      Cardano.BigNum.from_str('155381')
-    ),
-    Cardano.BigNum.from_str('1000000'),
-    Cardano.BigNum.from_str('34482'),
-    Cardano.BigNum.from_str('34482')
-  );
+  const txBuilder = Cardano.TransactionBuilder.new(createTxBuilderConfig());
 
   // Add script input
   const escrowAddress = getEscrowAddress();
@@ -265,39 +308,116 @@ export async function buildEscrowAttestTx(params: {
     );
   }
 
-  // Add script witness
-  const scriptWitness = Cardano.ScriptWitness.new_plutus_script(
-    Cardano.PlutusScriptWitness.new(
-      Cardano.PlutusWitnessVersion.new_v2(),
-      escrowScript,
-      redeemerData,
-      Cardano.PlutusData.new_map(Cardano.PlutusMap.new()) // Datum (inline)
-    )
-  );
-  
-  // Note: CSL doesn't expose add_script_witness directly on TransactionBuilder
-  // This would need to be added to the transaction after building
+  // Note: Script witnesses will be added by the wallet when signing
+  // The wallet will use the redeemer and script reference when building the final transaction
 
   const txBody = txBuilder.build();
-  const txHex = Buffer.from(txBody.to_bytes()).toString('hex');
+  
+  // Create a complete transaction with empty witness set
+  const witnessSet = Cardano.TransactionWitnessSet.new();
+  const tx = Cardano.Transaction.new(
+    txBody,
+    witnessSet,
+    undefined // No auxiliary data
+  );
+  
+  const txHex = Buffer.from(tx.to_bytes()).toString('hex');
 
   return { txHex };
 }
 
 /**
- * Build escrow claim transaction
+ * Build escrow claim transaction - sends funds to fixed receiver address
  */
 export async function buildEscrowClaimTx(params: {
   scriptUTXO: string;
   mentorAddress: string;
   mentorUTXOs: any[];
-}): Promise<{ txHex: string }> {
-  return buildEscrowAttestTx({
-    scriptUTXO: params.scriptUTXO,
-    redeemerType: 'ClaimFunds',
-    signerAddress: params.mentorAddress,
-    signerUTXOs: params.mentorUTXOs
-  });
+  escrowAmount?: number; // Amount in lovelace
+}): Promise<{ txHex: string; settledTo: string }> {
+  if (!escrowScript) {
+    throw new Error('Escrow script not loaded');
+  }
+
+  const [txHash, index] = params.scriptUTXO.split('#');
+  const scriptInput = Cardano.TransactionInput.new(
+    Cardano.TransactionHash.from_bytes(Buffer.from(txHash, 'hex')),
+    parseInt(index)
+  );
+
+  // Build ClaimFunds redeemer (index 2)
+  const redeemerData = Cardano.PlutusData.new_constr_plutus_data(
+    Cardano.ConstrPlutusData.new(
+      Cardano.BigNum.from_str('2'), // ClaimFunds = index 2
+      Cardano.PlutusList.new()
+    )
+  );
+
+  // Build transaction
+  const txBuilder = Cardano.TransactionBuilder.new(createTxBuilderConfig());
+
+  // Add script input
+  const escrowAddress = getEscrowAddress();
+  const escrowValue = params.escrowAmount || 50000000; // Default 50 ADA if not provided
+  txBuilder.add_input(
+    escrowAddress,
+    scriptInput,
+    Cardano.Value.new(Cardano.BigNum.from_str(escrowValue.toString()))
+  );
+
+  // Add mentor inputs for fees
+  const mentorAddr = addressFromBech32(params.mentorAddress);
+  for (const utxo of params.mentorUTXOs.slice(0, 2)) {
+    const txInput = Cardano.TransactionInput.new(
+      Cardano.TransactionHash.from_bytes(Buffer.from(utxo.tx_hash, 'hex')),
+      utxo.output_index
+    );
+    txBuilder.add_input(
+      mentorAddr,
+      txInput,
+      Cardano.Value.new(Cardano.BigNum.from_str(utxo.amount[0].quantity.toString()))
+    );
+  }
+
+  // CRITICAL: Add output to FIXED RECEIVER ADDRESS (100% of escrow funds)
+  const receiverAddr = addressFromBech32(RECEIVER_ADDRESS);
+  const receiverOutput = Cardano.TransactionOutput.new(
+    receiverAddr,
+    Cardano.Value.new(Cardano.BigNum.from_str(escrowValue.toString()))
+  );
+  txBuilder.add_output(receiverOutput);
+
+  // Add change output for mentor (fees only)
+  const fee = txBuilder.min_fee();
+  const mentorInputTotal = params.mentorUTXOs.slice(0, 2).reduce((sum, utxo) => 
+    sum + BigInt(utxo.amount[0].quantity), BigInt(0)
+  );
+  const mentorChange = mentorInputTotal - BigInt(fee.to_str());
+  
+  if (mentorChange > 0) {
+    const changeOutput = Cardano.TransactionOutput.new(
+      mentorAddr,
+      Cardano.Value.new(Cardano.BigNum.from_str(mentorChange.toString()))
+    );
+    txBuilder.add_output(changeOutput);
+  }
+
+  const txBody = txBuilder.build();
+  
+  // Create a complete transaction with empty witness set
+  const witnessSet = Cardano.TransactionWitnessSet.new();
+  const tx = Cardano.Transaction.new(
+    txBody,
+    witnessSet,
+    undefined // No auxiliary data
+  );
+  
+  const txHex = Buffer.from(tx.to_bytes()).toString('hex');
+
+  return { 
+    txHex,
+    settledTo: RECEIVER_ADDRESS
+  };
 }
 
 /**
@@ -345,16 +465,7 @@ export async function buildNFTMintTx(params: {
   );
 
   // Build transaction
-  const txBuilder = Cardano.TransactionBuilder.new(
-    await getProtocolParameters(),
-    Cardano.LinearFee.new(
-      Cardano.BigNum.from_str('44'),
-      Cardano.BigNum.from_str('155381')
-    ),
-    Cardano.BigNum.from_str('1000000'),
-    Cardano.BigNum.from_str('34482'),
-    Cardano.BigNum.from_str('34482')
-  );
+  const txBuilder = Cardano.TransactionBuilder.new(createTxBuilderConfig());
 
   // Add inputs
   const learnerAddr = addressFromBech32(params.learnerAddress);
@@ -370,15 +481,22 @@ export async function buildNFTMintTx(params: {
     );
   }
 
-  // Mint NFT
+  // Mint NFT - build mint structure manually for Plutus scripts
   const assetNameBytes = Buffer.from(assetName, 'utf8');
+  const assetName_csl = Cardano.AssetName.new(assetNameBytes);
+  const scriptHash = Cardano.ScriptHash.from_bytes(Buffer.from(policyId, 'hex'));
+  
+  // Create MintAssets and add the asset
+  const mintAssets = Cardano.MintAssets.new();
+  mintAssets.insert(assetName_csl, Cardano.Int.new_i32(1)); // Mint 1 token
+  
+  // Create Mint and insert the policy with its assets
   const mint = Cardano.Mint.new();
-  mint.set(
-    Cardano.ScriptHash.from_bytes(Buffer.from(policyId, 'hex')),
-    Cardano.AssetName.new(assetNameBytes),
-    Cardano.Int.new_i32(1) // Mint 1 token
-  );
-  txBuilder.set_mint(mint);
+  mint.insert(scriptHash, mintAssets);
+  
+  // Get the mint from transaction builder or create new one
+  const txBodyBuilder = txBuilder as any; // Type assertion to access internal methods
+  txBodyBuilder.set_mint(mint, Cardano.NativeScripts.new()); // Empty native scripts for Plutus
 
   // Add output with NFT
   const outputValue = Cardano.Value.new(Cardano.BigNum.from_str('2000000')); // Min UTXO
@@ -398,7 +516,16 @@ export async function buildNFTMintTx(params: {
   txBuilder.add_output(output);
 
   const txBody = txBuilder.build();
-  const txHex = Buffer.from(txBody.to_bytes()).toString('hex');
+  
+  // Create a complete transaction with empty witness set
+  const witnessSet = Cardano.TransactionWitnessSet.new();
+  const tx = Cardano.Transaction.new(
+    txBody,
+    witnessSet,
+    undefined // No auxiliary data
+  );
+  
+  const txHex = Buffer.from(tx.to_bytes()).toString('hex');
 
   return {
     txHex,

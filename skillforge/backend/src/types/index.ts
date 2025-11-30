@@ -55,9 +55,12 @@ export interface MatchResponse {
 
 export interface EscrowInitRequest {
   learnerAddress: string;
-  providerAddress: string;
+  providerAddress?: string;  // Legacy field name
+  mentorAddress?: string;    // New field name
   price: number;
   sessionId: string;
+  stakeKey?: string;
+  parsedIntent?: any;
 }
 
 export interface EscrowInitResponse {

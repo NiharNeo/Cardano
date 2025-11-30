@@ -26,7 +26,14 @@ type AppError = {
     message: string;
 };
 
-const App: React.FC = () => {
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import TutorLayout from './tutor/components/Layout';
+import Dashboard from './tutor/pages/Dashboard';
+import TutorProfile from './tutor/pages/Profile';
+import TutorSkills from './tutor/pages/Skills';
+import TutorAvailability from './tutor/pages/Availability';
+
+const LearnerApp: React.FC = () => {
     const wallet = useWallet();
     const [intent, setIntent] = React.useState<ParsedIntent | null>(null);
     const [matches, setMatches] = React.useState<ScoredProvider[]>([]);
@@ -479,9 +486,14 @@ const App: React.FC = () => {
                     <h1>SkillForge</h1>
                     <p>Voice-driven skill matching and on-chain session attestations for Cardano.</p>
                 </div>
-                <div className="app-badge">
-                    <span className="chip-dot" />
-                    Cardano dApp
+                <div className="flex items-center space-x-4">
+                    <Link to="/tutor" className="text-sm font-medium text-blue-600 hover:text-blue-800">
+                        Are you a Tutor?
+                    </Link>
+                    <div className="app-badge">
+                        <span className="chip-dot" />
+                        Cardano dApp
+                    </div>
                 </div>
             </header>
 
@@ -652,6 +664,22 @@ const App: React.FC = () => {
                 intent={intent}
             />
         </div>
+    );
+};
+
+const App: React.FC = () => {
+    return (
+        <BrowserRouter>
+            <Routes>
+                <Route path="/" element={<LearnerApp />} />
+                <Route path="/tutor" element={<TutorLayout />}>
+                    <Route index element={<Dashboard />} />
+                    <Route path="profile" element={<TutorProfile />} />
+                    <Route path="skills" element={<TutorSkills />} />
+                    <Route path="availability" element={<TutorAvailability />} />
+                </Route>
+            </Routes>
+        </BrowserRouter>
     );
 };
 

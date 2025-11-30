@@ -1,19 +1,11 @@
-[package]
-name = "skillforge"
+name = "skillforge/contracts"
 version = "1.0.0"
-description = "SkillForge Cardano smart contracts in Aiken"
-repository = "https://github.com/skillforge/contracts"
+plutus = "v3"
+compiler = "1.1.19"
+license = "Apache-2.0"
+description = "SkillForge Cardano smart contracts"
 
-[compiler]
-name = "aiken"
-version = ">= 1.0.0"
-
-[build]
-platform = "native"
-
-[validators]
-escrow = "validators/escrow.ak"
-
-[minting_policies]
-session_nft = "minting_policies/session_nft.ak"
-
+[[dependencies]]
+name = "aiken-lang/stdlib"
+version = "2.1.0"
+source = "github"

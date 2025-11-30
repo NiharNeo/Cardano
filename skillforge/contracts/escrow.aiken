@@ -1,0 +1,57 @@
+use aiken/hash.{Blake2b_224, Hash}
+use aiken/list
+use aiken/transaction.{Output, OutputReference, ScriptContext, Spend, Transaction}
+use aiken/transaction/credential.{VerificationKey}
+
+// --- CONSTANTS ---
+
+// The fixed receiver address for settlement (Bech32 decoded pkh would go here in real code)
+// For this example, we use a placeholder byte string for the PubKeyHash
+const receiver_pkh: Hash<Blake2b_224, VerificationKey> =
+  #"a8216e3defbdc23d45fa27a33bb869bff12616a1475178abf76c2ee2" // addr1q8uq... (mock hash)
+
+// --- TYPES ---
+
+type Action {
+  Cancel
+  Settle
+}
+
+type Datum {
+  learner: Hash<Blake2b_224, VerificationKey>,
+  provider: Hash<Blake2b_224, VerificationKey>,
+}
+
+// --- VALIDATOR ---
+
+validator {
+  fn escrow(datum: Datum, redeemer: Action, ctx: ScriptContext) -> Bool {
+    when ctx.purpose is {
+      Spend(_) ->
+        when redeemer is {
+          Cancel -> {
+            // In a real contract, check deadlines or signatures from both parties
+            True
+          }
+          Settle -> {
+            // REQUIREMENT: Funds must go to the fixed receiver address
+            let tx: Transaction = ctx.transaction
+            check_output_to_receiver(tx.outputs, receiver_pkh)
+          }
+        }
+      _ -> False
+    }
+  }
+}
+
+// --- HELPERS ---
+
+fn check_output_to_receiver(outputs: List<Output>, target_pkh: Hash<Blake2b_224, VerificationKey>) -> Bool {
+  // Check if ANY output goes to the target receiver
+  list.any(outputs, fn(output) {
+    when output.address.payment_credential is {
+      credential.VerificationKeyCredential(pkh) -> pkh == target_pkh
+      _ -> False
+    }
+  })
+}

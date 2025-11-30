@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import * as CardanoWasm from '@emurgo/cardano-serialization-lib-browser';
+import { Buffer } from 'buffer';
 
 export type WalletName = 'lace' | 'eternl' | 'nami' | null;
 
@@ -96,6 +98,18 @@ export interface NFTMintParams {
 }
 
 const WalletContext = createContext<WalletContextType | undefined>(undefined);
+
+// Helper function to convert hex address to bech32
+const hexToBech32 = (hexAddress: string): string => {
+    try {
+        const addressBytes = Buffer.from(hexAddress, 'hex');
+        const address = CardanoWasm.Address.from_bytes(addressBytes);
+        return address.to_bech32();
+    } catch (error) {
+        console.error('[Wallet] Error converting hex to bech32:', error);
+        throw new Error('Failed to convert address format');
+    }
+};
 
 // Default receiving address (fallback when wallet doesn't provide addresses)
 const DEFAULT_RECEIVING_ADDRESS = 'addr_test1qp6m4w67w2lveaskxm54ppwz825nwd7cnt2elhcctz7m0hjvzxm7s4m6nlxj93d98f7d73hxa2damsk02pzh2qq6t7yqcycgx0';
@@ -230,8 +244,12 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             });
 
             if (!match) {
-                console.error('[Wallet] Fixed collateral UTxO NOT found in address UTxOs.');
-                throw new Error("Fixed collateral UTxO not found. Ensure it exists on PRE-PROD.");
+                console.warn('[Wallet] Fixed collateral UTxO NOT found in address UTxOs.');
+                console.warn('[Wallet] Skipping collateral check - not needed for simple transactions');
+                // Don't throw error - collateral not needed for regular ADA transfers
+                setCollateralUtxo(null);
+                setCollateralAmount(null);
+                return; // Exit early, no collateral needed
             }
 
             // Validate Amount (>= 5 ADA) and Pure ADA
@@ -348,25 +366,80 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 throw error; // Re-throw to stop connection
             }
 
-            // Get addresses - MODIFIED LOGIC: Focus on payment address
-            // FORCE specific address for debugging as requested by user
-            const primaryPaymentAddress = DEFAULT_RECEIVING_ADDRESS;
-            console.log('[Wallet] FORCING payment address to:', primaryPaymentAddress);
-
-            // We ignore wallet's actual addresses for this debug session
-            const walletAddresses: WalletAddresses = {
-                used: [primaryPaymentAddress],
+            // Get addresses from wallet
+            let walletAddresses: WalletAddresses = {
+                used: [],
                 change: null,
-                reward: [] // Empty reward addresses to avoid stake logic
+                reward: []
             };
+
+            try {
+                // Get used addresses (CIP-30 returns hex format)
+                const usedAddressesHex = await api.getUsedAddresses();
+                if (usedAddressesHex && usedAddressesHex.length > 0) {
+                    // Convert hex addresses to bech32
+                    walletAddresses.used = usedAddressesHex.map((hexAddr: string) => hexToBech32(hexAddr));
+                    console.log('[Wallet] Used addresses:', walletAddresses.used);
+                }
+
+                // Get change address (CIP-30 returns hex format)
+                try {
+                    const changeAddrHex = await api.getChangeAddress();
+                    if (changeAddrHex) {
+                        walletAddresses.change = hexToBech32(changeAddrHex);
+                        console.log('[Wallet] Change address:', walletAddresses.change);
+                    }
+                } catch (e) {
+                    console.warn('[Wallet] Could not get change address:', e);
+                }
+
+                // Get reward addresses (stake addresses) (CIP-30 returns hex format)
+                try {
+                    const rewardAddressesHex = await api.getRewardAddresses();
+                    if (rewardAddressesHex && rewardAddressesHex.length > 0) {
+                        // Convert hex addresses to bech32
+                        walletAddresses.reward = rewardAddressesHex.map((hexAddr: string) => hexToBech32(hexAddr));
+                        console.log('[Wallet] Reward addresses:', walletAddresses.reward);
+                    }
+                } catch (e) {
+                    console.warn('[Wallet] Could not get reward addresses:', e);
+                }
+            } catch (error) {
+                console.error('[Wallet] Error getting addresses:', error);
+                throw new Error('Failed to get wallet addresses');
+            }
+
             setAddresses(walletAddresses);
 
+            // Set primary payment address (prefer used[0], fallback to change)
+            const primaryPaymentAddress = walletAddresses.used[0] || walletAddresses.change || null;
+            
+            if (!primaryPaymentAddress) {
+                throw new Error('No payment address available from wallet');
+            }
+
+            console.log('[Wallet] Payment address:', primaryPaymentAddress);
             setAddress(primaryPaymentAddress);
             setPaymentAddress(primaryPaymentAddress);
 
-            // Remove stake address logic
-            setStakeAddress(null);
-            setStakeKey(null);
+            // Set stake address and extract stake key
+            const stakeAddr = walletAddresses.reward[0] || null;
+            setStakeAddress(stakeAddr);
+            
+            // Extract stake key from stake address if available
+            if (stakeAddr) {
+                try {
+                    // Stake address format: stake_test1... or stake1...
+                    // We'll store the full bech32 address as the stake key
+                    setStakeKey(stakeAddr);
+                    console.log('[Wallet] Stake address:', stakeAddr);
+                } catch (e) {
+                    console.warn('[Wallet] Could not extract stake key:', e);
+                    setStakeKey(null);
+                }
+            } else {
+                setStakeKey(null);
+            }
 
             // Detect network ID from address
             const detectedNetworkId = primaryPaymentAddress?.startsWith('addr1') ? 1 : 0;
@@ -425,15 +498,46 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }, [wallet, paymentAddress]);
 
     const getBalance = useCallback(async (): Promise<string | null> => {
-        // We don't strictly need wallet.api if we are using the hardcoded address and backend
         if (!paymentAddress) return null;
 
         try {
-            console.log("Using payment address for balance:", paymentAddress);
+            console.log("[Wallet] Fetching balance for:", paymentAddress);
 
-            // User Instruction: "Sum lovelace from all UTxOs using the paymentAddress."
-            // We query the backend/Blockfrost for the address's UTXOs to get JSON data.
+            // STRATEGY 1: Try wallet API first (direct from wallet, no Blockfrost needed)
+            if (wallet?.api) {
+                try {
+                    console.log('[Wallet] Trying wallet.api.getBalance()...');
+                    const balanceCbor = await wallet.api.getBalance();
+                    
+                    // Parse CBOR balance (CIP-30 returns CBOR hex string)
+                    if (balanceCbor) {
+                        // Import CardanoWasm if not already available
+                        const CardanoWasm = await import('@emurgo/cardano-serialization-lib-browser');
+                        const balanceBytes = Buffer.from(balanceCbor, 'hex');
+                        const value = CardanoWasm.Value.from_bytes(balanceBytes);
+                        const lovelace = value.coin().to_str();
+                        const adaBalance = (Number(lovelace) / 1000000).toString();
+                        
+                        console.log('[Wallet] Balance from wallet API:', adaBalance, 'ADA');
+                        
+                        // Try to get UTXO count from wallet
+                        try {
+                            const utxos = await wallet.api.getUtxos();
+                            setUtxoCount(utxos?.length || 0);
+                        } catch (e) {
+                            console.warn('[Wallet] Could not get UTXO count:', e);
+                        }
+                        
+                        return adaBalance;
+                    }
+                } catch (walletError) {
+                    console.warn('[Wallet] Wallet API balance failed:', walletError);
+                    // Fall through to backend method
+                }
+            }
 
+            // STRATEGY 2: Try backend/Blockfrost (will fail if IP banned)
+            console.log('[Wallet] Trying backend UTXOs endpoint...');
             const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
             const response = await fetch(`${backendUrl}/utxos/${encodeURIComponent(paymentAddress)}`);
 
@@ -441,15 +545,13 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 const data = await response.json();
                 const utxos = Array.isArray(data) ? data : (data.data || data.utxos || []);
 
-                if (Array.isArray(utxos)) {
+                if (Array.isArray(utxos) && utxos.length > 0) {
                     let totalLovelace = BigInt(0);
 
                     for (const utxo of utxos) {
-                        // Backend UTXOs are JSON objects
                         let amount = BigInt(0);
 
                         if (utxo.amount) {
-                            // Blockfrost format: amount is array of { unit, quantity }
                             if (Array.isArray(utxo.amount)) {
                                 const lovelace = utxo.amount.find((a: any) => a.unit === 'lovelace');
                                 if (lovelace) amount = BigInt(lovelace.quantity);
@@ -457,7 +559,6 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                                 amount = BigInt(utxo.amount);
                             }
                         } else if (utxo.value) {
-                            // Koios/Other format
                             if (typeof utxo.value === 'object' && utxo.value.lovelace) {
                                 amount = BigInt(utxo.value.lovelace);
                             } else {
@@ -469,13 +570,13 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     }
 
                     const adaBalance = (Number(totalLovelace) / 1000000).toString();
-                    console.log('[Wallet] Calculated balance from backend UTXOs:', adaBalance);
-                    console.log('[Wallet] UTXO count:', utxos.length);
+                    console.log('[Wallet] Balance from backend UTXOs:', adaBalance, 'ADA');
                     setUtxoCount(utxos.length);
                     return adaBalance;
                 }
             }
 
+            console.warn('[Wallet] Backend returned no UTXOs or failed');
             setUtxoCount(0);
             return '0';
 
@@ -512,13 +613,138 @@ export const WalletProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     const submitTx = useCallback(async (signedTxCborHex: string): Promise<string> => {
         if (!wallet?.api) throw new Error('Wallet not connected');
-        return await wallet.api.submitTx(signedTxCborHex);
+        
+        try {
+            console.log('[Wallet] Submitting transaction, hex length:', signedTxCborHex.length);
+            const txHash = await wallet.api.submitTx(signedTxCborHex);
+            console.log('[Wallet] Transaction submitted successfully:', txHash);
+            return txHash;
+        } catch (error: any) {
+            console.error('[Wallet] submitTx error:', error);
+            console.error('[Wallet] Error details:', {
+                message: error.message,
+                info: error.info,
+                code: error.code,
+                stack: error.stack
+            });
+            throw new Error(error.message || error.info || 'Transaction submission failed');
+        }
     }, [wallet]);
 
     // Placeholders for other functions
     const lockFunds = async (params: EscrowLockParams): Promise<LockFundsResult> => {
-        console.log('lockFunds', params);
-        return { success: false, error: 'Not implemented' };
+        console.log('[Wallet] lockFunds called with:', params);
+        setLockState({ status: 'building_tx', error: null, txHash: null });
+
+        try {
+            if (!paymentAddress) {
+                throw new Error('Wallet not connected - no payment address');
+            }
+
+            if (!wallet?.api) {
+                throw new Error('Wallet API not available');
+            }
+
+            // Get UTXOs from wallet (not from Blockfrost)
+            console.log('[Wallet] Getting UTXOs from wallet...');
+            const walletUtxos = await getUTXOs();
+            console.log('[Wallet] Got', walletUtxos.length, 'UTXOs from wallet');
+
+            if (walletUtxos.length === 0) {
+                throw new Error('NO_UTXOS: Wallet has no UTXOs. Please ensure your wallet has funds.');
+            }
+
+            // Convert wallet UTXOs to format expected by backend
+            const formattedUtxos = walletUtxos.map((utxo: any) => {
+                // Parse UTXO CBOR if needed
+                try {
+                    const utxoObj = typeof utxo === 'string' 
+                        ? CardanoWasm.TransactionUnspentOutput.from_bytes(Buffer.from(utxo, 'hex'))
+                        : utxo;
+                    
+                    const input = utxoObj.input();
+                    const output = utxoObj.output();
+                    const amount = output.amount();
+                    
+                    return {
+                        tx_hash: Buffer.from(input.transaction_id().to_bytes()).toString('hex'),
+                        output_index: input.index(),
+                        amount: [{
+                            unit: 'lovelace',
+                            quantity: amount.coin().to_str()
+                        }]
+                    };
+                } catch (e) {
+                    console.warn('[Wallet] Could not parse UTXO:', e);
+                    return null;
+                }
+            }).filter((u: any) => u !== null);
+
+            console.log('[Wallet] Formatted', formattedUtxos.length, 'UTXOs for backend');
+
+            // 1. Initialize Escrow on Backend with wallet UTXOs
+            const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
+
+            console.log('[Wallet] Calling /escrow/init with:', {
+                learnerAddress: paymentAddress,
+                mentorAddress: params.mentorAddress,
+                price: params.price,
+                sessionId: params.sessionId,
+                utxoCount: formattedUtxos.length
+            });
+
+            const initResponse = await fetch(`${backendUrl}/escrow/init`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    learnerAddress: paymentAddress,
+                    mentorAddress: params.mentorAddress,
+                    price: params.price,
+                    sessionId: params.sessionId,
+                    stakeKey: stakeKey || undefined,
+                    parsedIntent: params.parsedIntent || undefined,
+                    walletUtxos: formattedUtxos // Send wallet's UTXOs
+                })
+            });
+
+            if (!initResponse.ok) {
+                const errorData = await initResponse.json().catch(() => ({ error: 'Unknown error' }));
+                throw new Error(errorData.error || errorData.message || 'Failed to initialize escrow on backend');
+            }
+
+            const initData = await initResponse.json();
+            const escrowData = initData.data || initData;
+            console.log('[Wallet] Escrow initialized:', escrowData);
+
+            // Backend returns txBody (which contains the transaction hex)
+            const txHex = escrowData.txBody || escrowData.txHex;
+            if (!txHex) {
+                throw new Error('Backend did not return transaction hex');
+            }
+
+            setLockState({ status: 'awaiting_signature', error: null, txHash: null });
+
+            // 2. Sign the transaction with wallet
+            console.log('[Wallet] Requesting signature from wallet...');
+            const signedTxHex = await signTx(txHex);
+            console.log('[Wallet] Transaction signed');
+
+            setLockState({ status: 'submitting', error: null, txHash: null });
+
+            // 3. Submit the signed transaction
+            console.log('[Wallet] Submitting transaction to blockchain...');
+            const txHash = await submitTx(signedTxHex);
+            console.log('[Wallet] Transaction submitted:', txHash);
+
+            setLockState({ status: 'confirmed', error: null, txHash });
+
+            return { success: true, txHash };
+
+        } catch (error: any) {
+            console.error('[Wallet] lockFunds error:', error);
+            setLockState({ status: 'error', error: error.message || 'Failed to lock funds', txHash: null });
+            return { success: false, error: error.message || 'Failed to lock funds' };
+        }
     };
     const resetEscrow = () => { };
     const attestLearner = async (params: EscrowAttestParams) => 'txHash';

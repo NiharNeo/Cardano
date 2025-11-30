@@ -1,0 +1,52 @@
+[
+  {
+    "id": "addr_test1_curl_verified",
+    "name": "API Test Tutor",
+    "bio": "Verified via curl",
+    "skills": [
+      "Cardano",
+      "CLI"
+    ],
+    "rateADA": 75,
+    "minDuration": 30,
+    "maxDuration": 60,
+    "availability": [
+      {
+        "day": "Monday",
+        "from": "09:00",
+        "to": "12:00"
+      }
+    ],
+    "walletAddress": "addr_test1_curl_verified",
+    "updatedAt": "2025-11-30T00:57:41.637Z",
+    "createdAt": "2025-11-30T00:57:41.637Z"
+  },
+  {
+    "id": "addr_test1...",
+    "name": "",
+    "bio": "",
+    "skills": [
+      "Python"
+    ],
+    "rateADA": 50,
+    "minDuration": 30,
+    "maxDuration": 120,
+    "availability": [],
+    "walletAddress": "addr_test1...",
+    "updatedAt": "2025-11-30T01:05:36.404Z",
+    "createdAt": "2025-11-30T01:05:32.516Z"
+  },
+  {
+    "id": "addr_test1qp6m4w67w2lveaskxm54ppwz825nwd7cnt2elhcctz7m0hjvzxm7s4m6nlxj93d98f7d73hxa2damsk02pzh2qq6t7yqcycgx0",
+    "name": "Pylabs",
+    "bio": "Everything Python",
+    "skills": [],
+    "rateADA": 50,
+    "minDuration": 30,
+    "maxDuration": 120,
+    "availability": [],
+    "walletAddress": "addr_test1qp6m4w67w2lveaskxm54ppwz825nwd7cnt2elhcctz7m0hjvzxm7s4m6nlxj93d98f7d73hxa2damsk02pzh2qq6t7yqcycgx0",
+    "updatedAt": "2025-11-30T01:12:12.561Z",
+    "createdAt": "2025-11-30T01:12:08.566Z"
+  }
+]

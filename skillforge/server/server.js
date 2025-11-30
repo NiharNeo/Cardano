@@ -120,7 +120,37 @@ app.post('/match', async (req, res) => {
     const { skill, priceMax, durationMinutes, urgency } = req.body;
 
     // Import providers data (in production, fetch from database)
-    const providers = require('../frontend/src/data/providers.json');
+    const staticProviders = require('../frontend/src/data/providers.json');
+
+    // Load dynamic tutors
+    let dynamicTutors = [];
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const tutorsPath = path.join(__dirname, 'tutors.json');
+      if (fs.existsSync(tutorsPath)) {
+        const data = fs.readFileSync(tutorsPath, 'utf8');
+        dynamicTutors = JSON.parse(data);
+      }
+    } catch (err) {
+      console.error('Error loading dynamic tutors:', err.message);
+    }
+
+    // Merge providers (dynamic tutors take precedence or append)
+    // For now, we'll just append them. 
+    // Map dynamic tutor structure to provider structure if needed.
+    const formattedDynamicTutors = dynamicTutors.map(t => ({
+      id: t.id,
+      name: t.name,
+      skills: t.skills,
+      rating: 5.0, // Default for new tutors
+      cost_per_hour: t.rateADA,
+      availability: t.availability.map(a => `${a.day} ${a.from}-${a.to}`),
+      timezone: 'UTC', // Default
+      bio: t.bio
+    }));
+
+    const providers = [...staticProviders, ...formattedDynamicTutors];
 
     // Simple scoring algorithm (can be enhanced)
     const scored = providers.map((p) => {
@@ -141,35 +171,40 @@ app.post('/match', async (req, res) => {
 
       // Price fit
       if (priceMax != null) {
-        if (p.hourlyRateAda <= priceMax) {
-          const budgetHeadroom = priceMax - p.hourlyRateAda;
+        // Handle both string and number types for cost
+        const rate = Number(p.cost_per_hour || p.hourlyRateAda || 0);
+        if (rate <= priceMax) {
+          const budgetHeadroom = priceMax - rate;
           const budgetScore = Math.max(0, Math.min(25, 25 - budgetHeadroom * 0.3));
           score += 25 + budgetScore * 0.4;
-          reasons.push(`Within budget (${p.hourlyRateAda} ₳ ≤ ${priceMax} ₳)`);
+          reasons.push(`Within budget (${rate} ₳ ≤ ${priceMax} ₳)`);
         } else {
           score -= 10;
-          reasons.push(`Above budget (${p.hourlyRateAda} ₳ > ${priceMax} ₳)`);
+          reasons.push(`Above budget (${rate} ₳ > ${priceMax} ₳)`);
         }
       }
 
       // Rating
-      const ratingScore = (p.rating / 5) * 20;
+      const rating = Number(p.rating || 0);
+      const ratingScore = (rating / 5) * 20;
       score += ratingScore;
-      reasons.push(`Strong rating (${p.rating.toFixed(1)}★)`);
+      reasons.push(`Strong rating (${rating.toFixed(1)}★)`);
 
       // Availability
-      if (p.availability.includes('today')) {
-        score += 8;
-        reasons.push('Available today');
-      } else if (p.availability.includes('this week')) {
-        score += 4;
-        reasons.push('Available this week');
+      // Simple check for now
+      if (p.availability && p.availability.some(a => a.toLowerCase().includes('today') || a.toLowerCase().includes('monday'))) { // Mock logic
+        // In a real app, parse the availability objects against current date
+      }
+
+      // Just give some points if they have availability listed
+      if (p.availability && p.availability.length > 0) {
+        score += 5;
+        reasons.push('Has availability');
       }
 
       // Urgency boost
-      if (urgency === 'high' && p.availability.includes('today')) {
+      if (urgency === 'high') {
         score += 5;
-        reasons.push('Urgent request - available today');
       }
 
       return {
@@ -195,6 +230,145 @@ app.post('/match', async (req, res) => {
     console.error('Error in /match:', err.message);
     res.status(500).json({ error: 'Failed to match providers' });
   }
+});
+
+// In-memory storage for sessions
+const sessionStore = new Map();
+
+// POST /session/create - Create a new session
+app.post('/session/create', (req, res) => {
+  try {
+    const { learnerAddress, providerId, skill, budget, duration, urgency, stakeKey } = req.body;
+
+    if (!learnerAddress || !providerId || !skill) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const sessionId = uuidv4();
+    const session = {
+      sessionId,
+      learnerAddress,
+      providerId,
+      skill,
+      budget,
+      duration,
+      urgency,
+      stakeKey,
+      status: 'created',
+      createdAt: new Date().toISOString()
+    };
+
+    sessionStore.set(sessionId, session);
+    console.log(`[Session] Created session ${sessionId}`);
+
+    res.json({ sessionId });
+  } catch (err) {
+    console.error('Error creating session:', err);
+    res.status(500).json({ error: 'Failed to create session' });
+  }
+});
+
+// --- TUTOR MANAGEMENT ENDPOINTS ---
+
+const fs = require('fs');
+const path = require('path');
+const TUTORS_FILE = path.join(__dirname, 'tutors.json');
+
+// Helper to read tutors
+function readTutors() {
+  if (!fs.existsSync(TUTORS_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(TUTORS_FILE, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+// Helper to save tutors
+function saveTutors(tutors) {
+  fs.writeFileSync(TUTORS_FILE, JSON.stringify(tutors, null, 2));
+}
+
+// POST /tutors - Create or Update Tutor
+app.post('/tutors', (req, res) => {
+  try {
+    const { id, name, bio, skills, rateADA, minDuration, maxDuration, availability, walletAddress } = req.body;
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+
+    // Use wallet address as ID if not provided, or generate one
+    const tutorId = id || walletAddress;
+
+    const tutors = readTutors();
+    const existingIndex = tutors.findIndex(t => t.id === tutorId || t.walletAddress === walletAddress);
+
+    const newTutor = {
+      id: tutorId,
+      name,
+      bio,
+      skills: skills || [],
+      rateADA: Number(rateADA),
+      minDuration: Number(minDuration),
+      maxDuration: Number(maxDuration),
+      availability: availability || [],
+      walletAddress,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (existingIndex >= 0) {
+      // Update
+      tutors[existingIndex] = { ...tutors[existingIndex], ...newTutor };
+    } else {
+      // Create
+      tutors.push({ ...newTutor, createdAt: new Date().toISOString() });
+    }
+
+    saveTutors(tutors);
+    res.json({ success: true, tutor: newTutor });
+  } catch (err) {
+    console.error('Error saving tutor:', err);
+    res.status(500).json({ error: 'Failed to save tutor profile' });
+  }
+});
+
+// GET /tutors/:id - Get Tutor Profile
+app.get('/tutors/:id', (req, res) => {
+  const tutors = readTutors();
+  const tutor = tutors.find(t => t.id === req.params.id || t.walletAddress === req.params.id);
+
+  if (!tutor) {
+    return res.status(404).json({ error: 'Tutor not found' });
+  }
+
+  res.json(tutor);
+});
+
+// POST /tutors/:id/skills - Update Skills
+app.post('/tutors/:id/skills', (req, res) => {
+  const { skills } = req.body;
+  const tutors = readTutors();
+  const index = tutors.findIndex(t => t.id === req.params.id || t.walletAddress === req.params.id);
+
+  if (index === -1) return res.status(404).json({ error: 'Tutor not found' });
+
+  tutors[index].skills = skills;
+  saveTutors(tutors);
+  res.json({ success: true, skills: tutors[index].skills });
+});
+
+// POST /tutors/:id/availability - Update Availability
+app.post('/tutors/:id/availability', (req, res) => {
+  const { availability } = req.body;
+  const tutors = readTutors();
+  const index = tutors.findIndex(t => t.id === req.params.id || t.walletAddress === req.params.id);
+
+  if (index === -1) return res.status(404).json({ error: 'Tutor not found' });
+
+  tutors[index].availability = availability;
+  saveTutors(tutors);
+  res.json({ success: true, availability: tutors[index].availability });
 });
 
 // POST /escrow/init - Initialize escrow transaction
@@ -274,6 +448,48 @@ app.get('/escrow/:id/status', async (req, res) => {
   }
 });
 
+// Fixed Receiver Address for Settlement
+const RECEIVER_ADDRESS = "addr1q8uqg3e28e3nd7ndxzjryywu4cu5lssvxmlyvnlldr832rlk7lkzl8ry4r5dknr8jeu7xwyhvecusldvw4huenhssxeswf7vdy";
+
+// POST /settleSession - Settle escrow and release funds to receiver
+app.post('/settleSession', async (req, res) => {
+  try {
+    const { escrowId } = req.body;
+
+    if (!escrowId) {
+      return res.status(400).json({ error: 'Escrow ID is required' });
+    }
+
+    const escrow = escrowStore.get(escrowId);
+    if (!escrow) {
+      return res.status(404).json({ error: 'Escrow not found' });
+    }
+
+    // In a real app, we would verify that both parties have attested.
+    // For this mock, we assume the frontend calls this only when ready.
+
+    // Update status
+    escrow.status = 'settled';
+    escrow.settledAt = new Date().toISOString();
+
+    // Build mock settlement transaction
+    // This simulates a transaction that spends the escrow UTXO and sends funds to RECEIVER_ADDRESS
+    const settlementTxCbor = 'placeholder_settlement_tx_cbor';
+    const txHash = `settle_tx_${uuidv4().slice(0, 8)}`;
+
+    res.json({
+      success: true,
+      txHash,
+      receiverAddress: RECEIVER_ADDRESS,
+      amountLovelace: escrow.amountLovelace,
+      settledAt: escrow.settledAt
+    });
+  } catch (err) {
+    console.error('Error in /settleSession:', err.message);
+    res.status(500).json({ error: 'Failed to settle session' });
+  }
+});
+
 // POST /nft/mint - Mint NFT with policy script
 // In production, this would build a real Cardano mint transaction
 app.post('/nft/mint', async (req, res) => {
@@ -299,16 +515,40 @@ app.post('/nft/mint', async (req, res) => {
     const policyId = 'policy_id_hex'; // Replace with actual policy ID
     const assetName = `SkillForgeSession${escrowId.slice(0, 8)}`;
 
+    // Metadata should include the receiver address
+    const metadata = {
+      name: assetName,
+      image: `ipfs://${metadataCid}`,
+      description: `SkillForge Session: ${skill}`,
+      attributes: {
+        providerId,
+        rating,
+        durationMinutes,
+        sent_to: RECEIVER_ADDRESS // Added requirement
+      }
+    };
+
     res.json({
       mintTxCbor,
       policyId,
       assetName,
+      metadata, // Return metadata for verification
       txHash: null // Will be set after transaction is submitted
     });
   } catch (err) {
     console.error('Error in /nft/mint:', err.message);
     res.status(500).json({ error: 'Failed to mint NFT' });
   }
+});
+
+// GET /contracts/info - Get contract hashes
+app.get('/contracts/info', (_req, res) => {
+  res.json({
+    contracts: 'SkillForge',
+    version: '1.0.0',
+    escrowValidatorHash: 'placeholder_escrow_hash',
+    nftPolicyId: 'placeholder_policy_id'
+  });
 });
 
 app.get('/', (_req, res) => {

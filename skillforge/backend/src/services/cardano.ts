@@ -125,9 +125,20 @@ export async function getProtocolParameters(): Promise<any> {
   }
 }
 
+// Simple in-memory cache for UTXOs (10 second TTL)
+const utxoCache = new Map<string, { data: any[]; timestamp: number }>();
+const CACHE_TTL = 10000; // 10 seconds
+
 // Get UTXOs for an address via Kupo (local) or Blockfrost (preprod/mainnet)
 export async function getUTXOs(address: string): Promise<any[]> {
   try {
+    // Check cache first
+    const cached = utxoCache.get(address);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log('[Cardano] Returning cached UTXOs for:', address);
+      return cached.data;
+    }
+
     if (USE_LOCAL) {
       console.log('[Cardano] Using Kupo for UTXOs (local devnet):', address);
       // Try Kupo first, fallback to Ogmios
@@ -145,15 +156,30 @@ export async function getUTXOs(address: string): Promise<any[]> {
       return [];
     }
 
-    console.log('[Cardano] Using Blockfrost for UTXOs:', address);
+    console.log('[Cardano] Fetching UTXOs from Blockfrost:', address);
     const response = await axios.get(`${BLOCKFROST_BASE_URL}/addresses/${address}/utxos`, {
       headers: {
         project_id: BLOCKFROST_PROJECT_ID
       }
     });
+    
+    // Cache the result
+    utxoCache.set(address, {
+      data: response.data,
+      timestamp: Date.now()
+    });
+    
     return response.data;
-  } catch (error) {
-    console.error('[Cardano] Error fetching UTXOs:', error);
+  } catch (error: any) {
+    console.error('[Cardano] Error fetching UTXOs:', error.message);
+    
+    // If Blockfrost is blocking us, return cached data if available (even if expired)
+    const cached = utxoCache.get(address);
+    if (cached && error.response?.status === 403) {
+      console.warn('[Cardano] Blockfrost blocked request, returning stale cache');
+      return cached.data;
+    }
+    
     return [];
   }
 }
@@ -171,10 +197,9 @@ export async function buildEscrowTransaction(
   }
 
   // Create escrow address from script
-  const networkId = Cardano.NetworkId.new(NETWORK);
   const scriptHash = escrowScript.hash();
   const stakeCred = Cardano.StakeCredential.from_scripthash(scriptHash);
-  const baseAddr = Cardano.BaseAddress.new(networkId, stakeCred, stakeCred);
+  const baseAddr = Cardano.BaseAddress.new(NETWORK, stakeCred, stakeCred);
   const escrowAddress = baseAddr.to_address();
 
   // Note: This is a simplified version

@@ -1,0 +1,165 @@
+{
+  "preamble": {
+    "title": "skillforge/contracts",
+    "description": "SkillForge Cardano smart contracts in Aiken",
+    "version": "1.0.0",
+    "plutusVersion": "v3",
+    "compiler": {
+      "name": "Aiken",
+      "version": "v1.1.19+e525483"
+    },
+    "license": "Apache-2.0"
+  },
+  "validators": [
+    {
+      "title": "escrow.escrow.spend",
+      "datum": {
+        "title": "datum",
+        "schema": {
+          "$ref": "#/definitions/escrow~1EscrowDatum"
+        }
+      },
+      "redeemer": {
+        "title": "redeemer",
+        "schema": {
+          "$ref": "#/definitions/escrow~1Redeemer"
+        }
+      },
+      "compiledCode": "5901c401010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cdc3a400530070024888966002600460106ea800e26466453001159800980098059baa0028cc004c038c030dd50014c02cdd5003c8c03cc040c040c040c0400052225980098020014660026010601c6ea8c004c03cdd5001d28528a01a8992cc004c02400e330013009300f3754600260206ea801294294500e456600266e1d20040038acc004c024c03cdd5180118081baa0048acc004c024c03cdd5180098081baa004899199119801001000912cc00400629422b30013371e6eb8c05400400e2946266004004602c00280890141bac301330143014301430143014301430143014301137540126eb8c048c04cc040dd50024528201c8a50403914a2807100e1180918099809980998099809800a01a45900a4c02cdd5003cc03800d2225980098020014566002601e6ea802a00716404115980098040014566002601e6ea802a00716404115980099b874801000a2b3001300f37540150038b20208acc004cdc3a400c00515980098079baa00a801c5901045900d201a403480686018601a0026e1d20003009375400716401c30070013003375400f149a26cac80081",
+      "hash": "70eff16488bb7670b32bf78f23c70538d148cc6c476383257233ee89"
+    },
+    {
+      "title": "escrow.escrow.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "compiledCode": "5901c401010029800aba2aba1aab9faab9eaab9dab9a48888896600264653001300700198039804000cdc3a400530070024888966002600460106ea800e26466453001159800980098059baa0028cc004c038c030dd50014c02cdd5003c8c03cc040c040c040c0400052225980098020014660026010601c6ea8c004c03cdd5001d28528a01a8992cc004c02400e330013009300f3754600260206ea801294294500e456600266e1d20040038acc004c024c03cdd5180118081baa0048acc004c024c03cdd5180098081baa004899199119801001000912cc00400629422b30013371e6eb8c05400400e2946266004004602c00280890141bac301330143014301430143014301430143014301137540126eb8c048c04cc040dd50024528201c8a50403914a2807100e1180918099809980998099809800a01a45900a4c02cdd5003cc03800d2225980098020014566002601e6ea802a00716404115980098040014566002601e6ea802a00716404115980099b874801000a2b3001300f37540150038b20208acc004cdc3a400c00515980098079baa00a801c5901045900d201a403480686018601a0026e1d20003009375400716401c30070013003375400f149a26cac80081",
+      "hash": "70eff16488bb7670b32bf78f23c70538d148cc6c476383257233ee89"
+    },
+    {
+      "title": "session_nft.session_nft.mint",
+      "redeemer": {
+        "title": "_redeemer",
+        "schema": {
+          "$ref": "#/definitions/session_nft~1MintRedeemer"
+        }
+      },
+      "compiledCode": "58f101010029800aba2aba1aab9faab9eaab9dab9a48888896600264646644b30013370e900018031baa0018992cc004cdc3a4000600e6ea800e26464b3001300d002899b8732330010013232330010013756601e6020602060206020601a6ea8c03c028896600200300389919912cc004cdc8805001456600266e3c02800a2003006403d1330050053014004403c6eb8c038004dd598078009808000a01e14bd6f7b630112cc0040062900044cdc02400466004004601e002806920028b2016375c601600260106ea800e2c8030dd7180498039baa0018b200a30070013007300800130070013003375400f149a26cac80081",
+      "hash": "91803f750c7ae52ffbbaf4f039c482025bc7e24d00bbf44a26cf0375"
+    },
+    {
+      "title": "session_nft.session_nft.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "compiledCode": "58f101010029800aba2aba1aab9faab9eaab9dab9a48888896600264646644b30013370e900018031baa0018992cc004cdc3a4000600e6ea800e26464b3001300d002899b8732330010013232330010013756601e6020602060206020601a6ea8c03c028896600200300389919912cc004cdc8805001456600266e3c02800a2003006403d1330050053014004403c6eb8c038004dd598078009808000a01e14bd6f7b630112cc0040062900044cdc02400466004004601e002806920028b2016375c601600260106ea800e2c8030dd7180498039baa0018b200a30070013007300800130070013003375400f149a26cac80081",
+      "hash": "91803f750c7ae52ffbbaf4f039c482025bc7e24d00bbf44a26cf0375"
+    }
+  ],
+  "definitions": {
+    "Bool": {
+      "title": "Bool",
+      "anyOf": [
+        {
+          "title": "False",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "True",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        }
+      ]
+    },
+    "ByteArray": {
+      "dataType": "bytes"
+    },
+    "Int": {
+      "dataType": "integer"
+    },
+    "escrow/EscrowDatum": {
+      "title": "EscrowDatum",
+      "anyOf": [
+        {
+          "title": "EscrowDatum",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "learner",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "mentor",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "price",
+              "$ref": "#/definitions/Int"
+            },
+            {
+              "title": "session",
+              "$ref": "#/definitions/ByteArray"
+            },
+            {
+              "title": "learner_attested",
+              "$ref": "#/definitions/Bool"
+            },
+            {
+              "title": "mentor_attested",
+              "$ref": "#/definitions/Bool"
+            }
+          ]
+        }
+      ]
+    },
+    "escrow/Redeemer": {
+      "title": "Redeemer",
+      "anyOf": [
+        {
+          "title": "AttestByLearner",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": []
+        },
+        {
+          "title": "AttestByMentor",
+          "dataType": "constructor",
+          "index": 1,
+          "fields": []
+        },
+        {
+          "title": "ClaimFunds",
+          "dataType": "constructor",
+          "index": 2,
+          "fields": []
+        },
+        {
+          "title": "Refund",
+          "dataType": "constructor",
+          "index": 3,
+          "fields": []
+        }
+      ]
+    },
+    "session_nft/MintRedeemer": {
+      "title": "MintRedeemer",
+      "anyOf": [
+        {
+          "title": "Mint",
+          "dataType": "constructor",
+          "index": 0,
+          "fields": [
+            {
+              "title": "session",
+              "$ref": "#/definitions/ByteArray"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

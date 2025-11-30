@@ -178,6 +178,38 @@ app.use('/session', sessionRouter);
 app.use('/nft', nftRouter);
 app.use('/test', testRouter);
 
+// GET /utxos/:address - Get UTXOs for an address
+app.get('/utxos/:address', async (req: Request, res: Response) => {
+  try {
+    const { address } = req.params;
+    
+    if (!address) {
+      return res.status(400).json({
+        success: false,
+        error: 'Address is required'
+      });
+    }
+
+    // Get UTXOs from Cardano service
+    const { getUTXOs } = require('./services/cardano');
+    const utxos = await getUTXOs(address);
+    
+    return res.json({
+      success: true,
+      address,
+      utxos: utxos || [],
+      count: utxos?.length || 0
+    });
+  } catch (error: any) {
+    console.error('Error fetching UTXOs:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch UTXOs',
+      message: error.message
+    });
+  }
+});
+
 // GET /tx/status/:txHash - Check transaction status
 app.get('/tx/status/:txHash', async (req: Request, res: Response) => {
   try {

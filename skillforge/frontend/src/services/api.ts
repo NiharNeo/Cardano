@@ -128,7 +128,7 @@ export async function getContractInfo(): Promise<ContractInfo> {
  */
 export async function matchProviders(request: MatchRequest & { stakeKey?: string }): Promise<MatchResponse> {
   console.log('[API] matchProviders request:', request);
-  
+
   try {
     const response = await fetch(`${API_BASE_URL}/match`, {
       method: 'POST',
@@ -190,7 +190,7 @@ export async function matchProviders(request: MatchRequest & { stakeKey?: string
  */
 export async function createSession(request: CreateSessionRequest): Promise<CreateSessionResponse> {
   console.log('[API] createSession request:', request);
-  
+
   try {
     const response = await fetch(`${API_BASE_URL}/session/create`, {
       method: 'POST',
@@ -234,7 +234,7 @@ export async function createSession(request: CreateSessionRequest): Promise<Crea
  */
 export async function initEscrow(request: EscrowInitRequest): Promise<EscrowInitResponse> {
   console.log('[API] initEscrow request:', request);
-  
+
   try {
     const response = await fetch(`${API_BASE_URL}/escrow/init`, {
       method: 'POST',
@@ -304,7 +304,7 @@ export async function getEscrowStatus(request: EscrowStatusRequest): Promise<Esc
  */
 export async function attestSession(request: AttestRequest): Promise<AttestResponse> {
   console.log('[API] attestSession request:', request);
-  
+
   try {
     const response = await fetch(`${API_BASE_URL}/session/attest`, {
       method: 'POST',
@@ -344,15 +344,15 @@ export async function attestSession(request: AttestRequest): Promise<AttestRespo
  */
 export async function mintNFT(request: NFTMintRequest): Promise<NFTMintResponse> {
   console.log('[API] mintNFT request:', { sessionId: request.sessionId, hasImage: !!request.eventCardImage });
-  
+
   try {
     const formData = new FormData();
     formData.append('sessionId', request.sessionId);
-    
+
     if (request.eventCardImage) {
       formData.append('eventCardImage', request.eventCardImage);
     }
-    
+
     if (request.stakeKey) {
       formData.append('stakeKey', request.stakeKey);
     }
@@ -390,3 +390,12 @@ export async function mintNFT(request: NFTMintRequest): Promise<NFTMintResponse>
     throw error;
   }
 }
+export const settleSession = async (escrowId: string): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/settleSession`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ escrowId })
+  });
+  if (!response.ok) throw new Error('Failed to settle session');
+  return await response.json();
+};
